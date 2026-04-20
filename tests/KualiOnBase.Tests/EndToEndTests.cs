@@ -286,6 +286,28 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
     }
 
     [Fact]
+    public async Task Validation_Error_Returns_PlainText_Body()
+    {
+        var url = BuildUrl(
+            documentId: "doc-x",
+            onbaseDocType: "DT",
+            targetFolderPath: _factory.TargetFolder,
+            downloadMode: "form", // wrong field — should nudge toward pdfExport
+            deleteAttachments: false);
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Add("X-Api-Key", "test-key");
+        var response = await _client.SendAsync(req);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/plain");
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("downloadMode must be one of: pdf, attachments, all.");
+        body.Should().Contain("did you mean downloadMode=pdf and pdfExport=form");
+        body.Should().NotContain("[object Object]");
+    }
+
+    [Fact]
     public async Task Missing_TargetFolder_Returns_400()
     {
         var bogus = Path.Combine(_factory.Sandbox, "does-not-exist");

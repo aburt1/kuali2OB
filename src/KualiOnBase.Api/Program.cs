@@ -50,6 +50,29 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Kuali's HTTP Action surfaces our response body as-is but stringifies JSON
+// as "[object Object]", so returning plain-text errors keeps operator feedback
+// readable in Kuali. This handler catches anything that escapes endpoint-level
+// try/catch (e.g. DB failures during retry-queue insert) and does the same.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        var ex = feature?.Error;
+        var logger = context.RequestServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("GlobalException");
+        logger.LogError(ex, "Unhandled exception at {Method} {Path}",
+            context.Request.Method, context.Request.Path);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        await context.Response.WriteAsync(
+            $"Internal error: {ex?.Message ?? "unknown"}");
+    });
+});
+
 app.UseSerilogRequestLogging();
 
 var uiEnabled = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<UiOptions>>().Value.Enabled;

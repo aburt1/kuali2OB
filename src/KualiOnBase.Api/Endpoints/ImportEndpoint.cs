@@ -47,22 +47,35 @@ public static class ImportEndpoint
         if (string.IsNullOrWhiteSpace(documentId)) errors.Add("documentId is required.");
         if (string.IsNullOrWhiteSpace(onbaseDocType)) errors.Add("onbaseDocType is required.");
         if (string.IsNullOrWhiteSpace(targetFolderPath)) errors.Add("targetFolderPath is required.");
-        if (string.IsNullOrWhiteSpace(downloadMode)) errors.Add("downloadMode is required.");
+        if (string.IsNullOrWhiteSpace(downloadMode))
+        {
+            errors.Add("downloadMode is required.");
+        }
         else if (!DownloadModes.TryParse(downloadMode, out _))
-            errors.Add("downloadMode must be one of: pdf, attachments, all.");
+        {
+            // Common confusion: Form / Combined / Attachments are pdfExport values,
+            // not downloadMode values. Nudge the caller toward the right param.
+            var hint = LooksLikePdfExportValue(downloadMode)
+                ? $" (it looks like '{downloadMode}' is a pdfExport value — did you mean downloadMode=pdf and pdfExport={downloadMode}?)"
+                : "";
+            errors.Add($"downloadMode must be one of: pdf, attachments, all.{hint}");
+        }
         if (deleteAttachments is null) errors.Add("deleteAttachments is required.");
 
         string? canonicalPdfExport = null;
         if (!PdfExportOptions.TryNormalize(pdfExport, out canonicalPdfExport))
         {
-            errors.Add("pdfExport must be one of: Form, Combined, Attachments (or omitted).");
+            var hint = DownloadModes.TryParse(pdfExport ?? "", out _)
+                ? $" (it looks like '{pdfExport}' is a downloadMode value — did you mean downloadMode={pdfExport}?)"
+                : "";
+            errors.Add($"pdfExport must be one of: Form, Combined, Attachments (or omitted).{hint}");
         }
 
         if (errors.Count > 0)
         {
             log.LogWarning("Import request rejected (validation): {Errors} | query={Query}",
                 string.Join(" | ", errors), request.QueryString.Value);
-            return Results.BadRequest(new { errors });
+            return TextError(400, string.Join("\n", errors));
         }
 
         var keywords = ExtractKeywords(request.Query);
@@ -116,20 +129,31 @@ public static class ImportEndpoint
         catch (ArgumentException ex)
         {
             await MarkFailedAsync(queue, job, ex, ct);
-            return Results.BadRequest(new { error = ex.Message });
+            log.LogWarning(ex, "Import job {JobId} rejected (bad argument)", job.Id);
+            return TextError(400, ex.Message);
         }
         catch (DirectoryNotFoundException ex)
         {
             await MarkFailedAsync(queue, job, ex, ct);
-            return Results.BadRequest(new { error = ex.Message });
+            log.LogWarning(ex, "Import job {JobId} rejected (target folder)", job.Id);
+            return TextError(400, ex.Message);
         }
         catch (Exception ex)
         {
             await MarkFailedAsync(queue, job, ex, ct);
             log.LogError(ex, "Import job {JobId} failed permanently", job.Id);
-            return Results.Problem(title: "Import failed", detail: ex.Message, statusCode: 500);
+            return TextError(500, $"Import failed: {ex.Message}");
         }
     }
+
+    // Kuali's HTTP Action stringifies our response body as "[object Object]" when it's
+    // JSON, so operators can't see the actual error. Plain-text bodies render as-is,
+    // which makes them readable in Kuali's "response data" dialog.
+    private static IResult TextError(int status, string message) =>
+        Results.Text(message, contentType: "text/plain; charset=utf-8", statusCode: status);
+
+    private static bool LooksLikePdfExportValue(string? s) =>
+        PdfExportOptions.TryNormalize(s, out var canon) && canon is not null;
 
     private static bool IsTransient(Exception ex) => ex switch
     {
