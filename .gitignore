@@ -1,0 +1,47 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+project.lock.json
+artifacts/
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# macOS
+.DS_Store
+
+# Runtime state — NEVER commit these
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+logs/
+backup/
+
+# Secrets / local config overrides
+appsettings.*.local.json
+appsettings.Production.json
+appsettings.Local.json
+*.pfx
+*.pem
+*.key
+.env
+.env.*
+
+# Claude local settings (contains per-user permission allowlist)
+.claude/settings.local.json
+
+# Probe output — regenerate when needed, don't commit
+tools/kuali-schema-dump.json
+
+# Test output
+TestResults/
+coverage/
+*.trx

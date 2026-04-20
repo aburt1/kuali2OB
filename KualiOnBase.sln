@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C9C2907C-64DA-43F4-A7A1-F6F1594903B2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KualiOnBase.Api", "src\KualiOnBase.Api\KualiOnBase.Api.csproj", "{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{4DBF20CF-EF45-41F5-844D-3272A2DE60B0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KualiOnBase.Tests", "tests\KualiOnBase.Tests\KualiOnBase.Tests.csproj", "{B14CF1D8-3AF2-4208-A138-A416236A88D7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B14CF1D8-3AF2-4208-A138-A416236A88D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B14CF1D8-3AF2-4208-A138-A416236A88D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B14CF1D8-3AF2-4208-A138-A416236A88D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B14CF1D8-3AF2-4208-A138-A416236A88D7}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{88DA5AB0-DAB3-4483-BFB7-C5485FF518E5} = {C9C2907C-64DA-43F4-A7A1-F6F1594903B2}
+		{B14CF1D8-3AF2-4208-A138-A416236A88D7} = {4DBF20CF-EF45-41F5-844D-3272A2DE60B0}
+	EndGlobalSection
+EndGlobal

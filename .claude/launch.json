@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/KualiOnBase.Api", "--no-launch-profile", "--urls", "http://localhost:5180"],
+      "port": 5180
+    }
+  ]
+}

@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Kuali → OnBase Simulator</title>
+<style>
+  :root {
+    --bg: #0c0f14;
+    --panel: #151a22;
+    --panel-2: #1b2230;
+    --border: #232a38;
+    --text: #e7ebf2;
+    --muted: #8793a7;
+    --accent: #5fa8ff;
+    --green: #3ecf8e;
+    --amber: #f2b84b;
+    --red: #f06671;
+    --blue: #5fa8ff;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --panel-2: #f1f3f7;
+      --border: #e4e7ee;
+      --text: #141924;
+      --muted: #6a7486;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 24px 32px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  h1 .sub {
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 8px;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .summary {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .summary .stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .summary .stat strong {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .key-state {
+    font-size: 12px;
+    color: var(--muted);
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .key-state.ok::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.15);
+  }
+  .key-state.missing::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--amber);
+  }
+  button, .btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  button:hover { background: var(--panel-2); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04111e;
+    font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button.ghost { background: transparent; }
+  button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+  main { padding: 0 32px 48px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  dialog.modal {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 24px;
+    width: min(540px, calc(100% - 32px));
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+  }
+  dialog.modal::backdrop {
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(2px);
+  }
+  dialog.modal h2 {
+    margin: 0 0 8px;
+    font-size: 16px;
+  }
+  dialog.modal p {
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .field label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .field input, .field select {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 9px 12px;
+    font: inherit;
+  }
+  .field input:focus, .field select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 0;
+    border-color: transparent;
+  }
+  .field .hint { color: var(--muted); font-size: 12px; }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+
+  /* Jobs list */
+  .jobs {
+    margin-top: 16px;
+  }
+  .row-head, .row {
+    display: grid;
+    grid-template-columns: 110px 1.4fr 1.2fr 0.9fr 0.6fr 0.8fr 32px;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .row-head {
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+  }
+  .row {
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.08s;
+  }
+  .row:hover { background: var(--panel-2); }
+  .row:last-child { border-bottom: none; }
+  .row.pulse { animation: pulse 0.9s ease-out; }
+  @keyframes pulse {
+    0% { background: rgba(95, 168, 255, 0.12); }
+    100% { background: transparent; }
+  }
+  .row .docid, .row .target {
+    font-family: var(--mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row .target { color: var(--muted); }
+  .chev {
+    justify-self: end;
+    color: var(--muted);
+    transition: transform 0.15s;
+  }
+  .row.open .chev { transform: rotate(90deg); }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+  .status::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+  }
+  .status.Succeeded { color: var(--green); border-color: rgba(62,207,142,0.35); }
+  .status.Succeeded::before { background: var(--green); }
+  .status.Failed { color: var(--red); border-color: rgba(240,102,113,0.35); }
+  .status.Failed::before { background: var(--red); }
+  .status.Retrying { color: var(--amber); border-color: rgba(242,184,75,0.35); }
+  .status.Retrying::before { background: var(--amber); }
+  .status.Running { color: var(--blue); border-color: rgba(95,168,255,0.35); }
+  .status.Running::before {
+    background: var(--blue);
+    animation: breathe 1.2s ease-in-out infinite;
+  }
+  @keyframes breathe { 50% { opacity: 0.35; } }
+
+  .detail {
+    padding: 16px 20px 20px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    font-size: 13px;
+  }
+  @media (max-width: 900px) { .detail { grid-template-columns: 1fr; } }
+  .detail h3 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .detail .meta dl {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 6px 12px;
+    margin: 0;
+  }
+  .detail .meta dt { color: var(--muted); }
+  .detail .meta dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+  .detail .meta .error { color: var(--red); }
+  .detail .meta ul { margin: 0; padding-left: 18px; }
+  .detail .meta ul li { font-family: var(--mono); }
+  .copy {
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 11px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .copy:hover { color: var(--text); }
+
+  /* Funnel */
+  .funnel {
+    position: relative;
+    padding: 0;
+    list-style: none;
+    margin: 0;
+  }
+  .funnel::before {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: var(--border);
+  }
+  .funnel li {
+    position: relative;
+    padding: 4px 0 14px 28px;
+  }
+  .funnel li:last-child { padding-bottom: 0; }
+  .funnel li .dot {
+    position: absolute;
+    left: 1px; top: 7px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 2px solid var(--muted);
+  }
+  .funnel li.ok .dot { border-color: var(--green); background: var(--green); box-shadow: 0 0 0 3px rgba(62,207,142,0.15); }
+  .funnel li.fail .dot { border-color: var(--red); background: var(--red); box-shadow: 0 0 0 3px rgba(240,102,113,0.15); }
+  .funnel li.kuali .dot { border-color: var(--accent); background: var(--accent); }
+  .funnel li.hollow .dot { background: var(--panel); border-color: var(--accent); }
+  .funnel .kind {
+    font-weight: 600;
+    font-size: 12px;
+    display: inline-flex;
+    gap: 6px;
+    align-items: baseline;
+  }
+  .funnel .kind .time {
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .funnel .msg {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+    font-family: var(--mono);
+    word-break: break-all;
+  }
+  .funnel li.fail .msg { color: var(--red); }
+  .funnel details {
+    margin-top: 6px;
+  }
+  .funnel details summary {
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+    list-style: revert;
+  }
+  .funnel details summary:hover { color: var(--text); }
+  .funnel pre {
+    margin: 6px 0 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .funnel-empty {
+    color: var(--muted);
+    font-style: italic;
+    font-size: 12px;
+  }
+
+  .empty, .error-banner {
+    padding: 56px 24px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .empty strong { color: var(--text); display: block; margin-bottom: 6px; font-size: 15px; }
+  .error-banner { color: var(--red); }
+
+  .hint-inline {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    font-family: var(--mono);
+  }
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-right: 4px;
+  }
+
+  footer {
+    padding: 16px 32px;
+    color: var(--muted);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  footer a { color: var(--muted); text-decoration: underline dotted; }
+  .dot-live {
+    display: inline-block;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    margin-right: 6px;
+    box-shadow: 0 0 0 3px rgba(62,207,142,0.15);
+  }
+  .dot-live.stale { background: var(--amber); box-shadow: 0 0 0 3px rgba(242,184,75,0.15); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Kuali → OnBase <span class="sub">Simulator</span></h1>
+    <div class="toolbar">
+      <div class="summary" id="summary" aria-live="polite"></div>
+      <span id="key-state" class="key-state missing">No API key set</span>
+      <button class="ghost" id="set-key">API key</button>
+      <button class="primary" id="open-import">Fire test import</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel jobs" aria-label="Recent import jobs">
+      <div class="row-head" role="row">
+        <span>ID</span>
+        <span>Document</span>
+        <span>Target folder</span>
+        <span>Mode</span>
+        <span>Files</span>
+        <span>Status</span>
+        <span></span>
+      </div>
+      <div id="rows"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span><span class="dot-live" id="live-dot"></span><span id="live-text">Polling every 3s</span></span>
+    <span>POST <code>/api/kuali-onbase-import</code> · GET <code>/api/jobs</code></span>
+  </footer>
+
+  <!-- API key dialog -->
+  <dialog id="key-dialog" class="modal" aria-labelledby="key-title">
+    <h2 id="key-title">Enter API key</h2>
+    <p>Stored locally in your browser. Sent as <code>X-Api-Key</code> on every request.</p>
+    <form method="dialog" id="key-form">
+      <div class="field">
+        <label for="api-key">X-Api-Key</label>
+        <input id="api-key" type="password" autocomplete="off" spellcheck="false" required />
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" id="key-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Import form dialog -->
+  <dialog id="import-dialog" class="modal" aria-labelledby="import-title">
+    <h2 id="import-title">Fire test import</h2>
+    <p>Submits a POST to <code>/api/kuali-onbase-import</code>. Requires a real document id in your Kuali tenant.</p>
+    <form id="import-form">
+      <div class="field">
+        <label for="f-documentId">documentId</label>
+        <input id="f-documentId" required />
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="f-onbaseDocType">onbaseDocType</label>
+          <input id="f-onbaseDocType" value="IT - Access" required />
+        </div>
+        <div class="field">
+          <label for="f-downloadMode">downloadMode</label>
+          <select id="f-downloadMode">
+            <option value="attachments">attachments</option>
+            <option value="pdf">pdf</option>
+            <option value="all">all</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-targetFolderPath">targetFolderPath</label>
+        <input id="f-targetFolderPath" required />
+        <span class="hint">Must exist and be writable by the API process.</span>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="f-deleteAttachments">deleteAttachments</label>
+          <select id="f-deleteAttachments">
+            <option value="false" selected>false</option>
+            <option value="true">true</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-deleteDocument">deleteDocument</label>
+          <select id="f-deleteDocument">
+            <option value="false" selected>false</option>
+            <option value="true">true</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="f-key1">KeywordKey1</label>
+          <input id="f-key1" value="Department" />
+        </div>
+        <div class="field">
+          <label for="f-val1">KeywordValue1</label>
+          <input id="f-val1" value="ITS" />
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="ghost" id="import-cancel">Cancel</button>
+        <button type="submit" class="primary" id="import-submit">Submit import</button>
+      </div>
+      <div id="import-result" class="hint-inline" aria-live="polite"></div>
+    </form>
+  </dialog>
+
+<script>
+(() => {
+  const $ = (sel) => document.querySelector(sel);
+  const rowsEl = $("#rows");
+  const summaryEl = $("#summary");
+  const keyStateEl = $("#key-state");
+  const liveDot = $("#live-dot");
+  const liveText = $("#live-text");
+
+  const KEY_STORAGE = "kuali-onbase.apikey";
+  const getKey = () => localStorage.getItem(KEY_STORAGE) || "";
+  const setKey = (v) => {
+    if (v) localStorage.setItem(KEY_STORAGE, v);
+    else localStorage.removeItem(KEY_STORAGE);
+    renderKeyState();
+  };
+
+  function renderKeyState() {
+    const has = !!getKey();
+    keyStateEl.textContent = has ? "API key set" : "No API key set";
+    keyStateEl.className = "key-state " + (has ? "ok" : "missing");
+  }
+
+  // --- API key dialog ---
+  const keyDialog = $("#key-dialog");
+  $("#set-key").addEventListener("click", () => {
+    $("#api-key").value = getKey();
+    keyDialog.showModal();
+  });
+  $("#key-cancel").addEventListener("click", () => keyDialog.close());
+  $("#key-form").addEventListener("submit", (e) => {
+    setKey($("#api-key").value.trim());
+  });
+
+  // --- Import dialog ---
+  const importDialog = $("#import-dialog");
+  $("#open-import").addEventListener("click", () => {
+    if (!getKey()) {
+      keyDialog.showModal();
+      return;
+    }
+    $("#import-result").textContent = "";
+    importDialog.showModal();
+  });
+  $("#import-cancel").addEventListener("click", () => importDialog.close());
+
+  $("#import-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submitBtn = $("#import-submit");
+    submitBtn.disabled = true;
+    $("#import-result").textContent = "Submitting…";
+
+    const params = new URLSearchParams({
+      documentId: $("#f-documentId").value.trim(),
+      onbaseDocType: $("#f-onbaseDocType").value.trim(),
+      targetFolderPath: $("#f-targetFolderPath").value.trim(),
+      downloadMode: $("#f-downloadMode").value,
+      deleteAttachments: $("#f-deleteAttachments").value,
+      deleteDocument: $("#f-deleteDocument").value,
+    });
+    const k1 = $("#f-key1").value.trim();
+    const v1 = $("#f-val1").value.trim();
+    if (k1 && v1) {
+      params.append("KeywordKey1", k1);
+      params.append("KeywordValue1", v1);
+    }
+
+    try {
+      const res = await fetch("/api/kuali-onbase-import?" + params.toString(), {
+        method: "POST",
+        headers: { "X-Api-Key": getKey() },
+      });
+      const body = await res.text();
+      $("#import-result").textContent = `${res.status} ${res.statusText} — ${body}`;
+      if (res.ok || res.status === 202) {
+        setTimeout(() => importDialog.close(), 600);
+        refreshJobs(true);
+      }
+    } catch (err) {
+      $("#import-result").textContent = "Network error: " + err.message;
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  // --- Jobs list ---
+  const openRows = new Set();
+  let lastJobsById = new Map();
+  let lastRefreshOk = true;
+
+  function fmtRelative(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 5) return "just now";
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return d.toLocaleString();
+  }
+
+  function escapeHtml(s) {
+    return (s ?? "").toString().replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function renderSummary(jobs) {
+    const counts = { Succeeded: 0, Failed: 0, Retrying: 0, Running: 0 };
+    for (const j of jobs) counts[j.status] = (counts[j.status] || 0) + 1;
+    summaryEl.innerHTML = `
+      <span class="stat"><strong>${counts.Running}</strong> running</span>
+      <span class="stat"><strong>${counts.Succeeded}</strong> ok</span>
+      <span class="stat"><strong>${counts.Retrying}</strong> retry</span>
+      <span class="stat"><strong>${counts.Failed}</strong> failed</span>
+    `;
+  }
+
+  function renderRow(j, isNew) {
+    const open = openRows.has(j.id);
+    const pulseClass = isNew ? " pulse" : "";
+    const detail = open ? renderDetail(j) : "";
+    return `
+      <div class="row${pulseClass}${open ? " open" : ""}"
+           data-id="${j.id}"
+           role="button"
+           tabindex="0"
+           aria-expanded="${open}">
+        <span class="docid">#${j.id}</span>
+        <span class="docid" title="${escapeHtml(j.documentId)}">${escapeHtml(j.documentId)}</span>
+        <span class="target" title="${escapeHtml(j.targetFolderPath)}">${escapeHtml(j.targetFolderPath)}</span>
+        <span>${escapeHtml(j.downloadMode)}</span>
+        <span>${j.files.length}</span>
+        <span><span class="status ${j.status}">${j.status}</span></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </div>
+      ${detail}
+    `;
+  }
+
+  const EVENT_CLASS = {
+    ImportStarted: "hollow",
+    DocumentFetched: "kuali",
+    ExportRequested: "kuali",
+    ExportCallbackReceived: "kuali",
+    PdfDownloaded: "ok",
+    AttachmentDownloaded: "ok",
+    FilesRenamed: "hollow",
+    BackupCreated: "hollow",
+    FilesCopiedToTarget: "ok",
+    IndexFileWritten: "ok",
+    AttachmentsCleared: "hollow",
+    DocumentDeleted: "hollow",
+    ImportSucceeded: "ok",
+    ImportFailed: "fail",
+  };
+
+  function fmtClock(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function renderFunnel(events) {
+    if (!events || events.length === 0) {
+      return `<span class="funnel-empty">No events recorded yet.</span>`;
+    }
+    const items = events.map((e) => {
+      const cls = EVENT_CLASS[e.kind] || "hollow";
+      const payload = e.payload != null
+        ? `<details><summary>payload</summary><pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre></details>`
+        : "";
+      const msg = e.message
+        ? `<div class="msg">${escapeHtml(e.message)}</div>`
+        : "";
+      return `
+        <li class="${cls}">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="kind">${escapeHtml(e.kind)}<span class="time">${fmtClock(e.at)}</span></span>
+          ${msg}
+          ${payload}
+        </li>
+      `;
+    }).join("");
+    return `<ol class="funnel">${items}</ol>`;
+  }
+
+  function renderDetail(j) {
+    const filesList = j.files.length
+      ? `<ul>${j.files.map((f) => `<li>${escapeHtml(f)} <button class="copy" data-copy="${escapeHtml(f)}">copy</button></li>`).join("")}</ul>`
+      : `<span style="color:var(--muted)">No files produced yet.</span>`;
+    const kws = j.keywords && j.keywords.length
+      ? j.keywords.map((k) => `<span class="tag">${escapeHtml(k.key)}=${escapeHtml(k.value)}</span>`).join("")
+      : `<span style="color:var(--muted)">—</span>`;
+    const attemptLine = j.attemptCount > 1 || j.nextAttemptAt
+      ? `<dt>Attempt</dt><dd>${j.attemptCount}${j.nextAttemptAt ? ` · next ${fmtRelative(j.nextAttemptAt)}` : ""}</dd>`
+      : "";
+    return `
+      <div class="detail">
+        <div class="meta">
+          <h3>Job details</h3>
+          <dl>
+            <dt>Created</dt><dd>${fmtRelative(j.createdAt)}<span style="color:var(--muted); margin-left:8px">${new Date(j.createdAt).toLocaleString()}</span></dd>
+            <dt>Updated</dt><dd>${fmtRelative(j.updatedAt)}</dd>
+            <dt>OnBase DocType</dt><dd>${escapeHtml(j.onbaseDocType)}</dd>
+            <dt>Keywords</dt><dd>${kws}</dd>
+            <dt>Delete attachments</dt><dd>${j.deleteAttachments ? "yes" : "no"}</dd>
+            <dt>Delete document</dt><dd>${j.deleteDocument ? "yes" : "no"}</dd>
+            <dt>Backup folder</dt><dd>${j.backupFolderPath ? escapeHtml(j.backupFolderPath) + ` <button class="copy" data-copy="${escapeHtml(j.backupFolderPath)}">copy</button>` : '<span style="color:var(--muted)">—</span>'}</dd>
+            <dt>Files produced</dt><dd>${filesList}</dd>
+            ${attemptLine}
+            ${j.lastError ? `<dt>Last error</dt><dd class="error">${escapeHtml(j.lastError)}</dd>` : ""}
+          </dl>
+        </div>
+        <div>
+          <h3>Timeline · what Kuali sent us</h3>
+          ${renderFunnel(j.events)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderEmpty() {
+    rowsEl.innerHTML = `
+      <div class="empty">
+        <strong>No imports yet.</strong>
+        Fire a test import, or POST to <code>/api/kuali-onbase-import</code>.
+      </div>
+    `;
+  }
+
+  function renderError(msg) {
+    rowsEl.innerHTML = `<div class="error-banner">${escapeHtml(msg)}</div>`;
+  }
+
+  async function refreshJobs(highlightNew) {
+    const key = getKey();
+    if (!key) {
+      renderError("Set your API key to load jobs.");
+      liveDot.classList.add("stale");
+      liveText.textContent = "Paused — no API key";
+      return;
+    }
+    try {
+      const res = await fetch("/api/jobs?limit=100", {
+        headers: { "X-Api-Key": key },
+      });
+      if (res.status === 401) {
+        renderError("API key rejected (401). Open API key to update it.");
+        liveDot.classList.add("stale");
+        liveText.textContent = "Paused — auth failed";
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const jobs = await res.json();
+      lastRefreshOk = true;
+      liveDot.classList.remove("stale");
+      liveText.textContent = "Polling every 3s";
+
+      renderSummary(jobs);
+
+      if (jobs.length === 0) {
+        lastJobsById = new Map();
+        renderEmpty();
+        return;
+      }
+
+      // Detect new / updated rows so we can pulse only those.
+      const newIds = new Set();
+      const nextById = new Map();
+      for (const j of jobs) {
+        nextById.set(j.id, j);
+        const prev = lastJobsById.get(j.id);
+        if (!prev || prev.updatedAt !== j.updatedAt || prev.status !== j.status) {
+          if (highlightNew || lastJobsById.size > 0) newIds.add(j.id);
+        }
+      }
+
+      rowsEl.innerHTML = jobs.map((j) => renderRow(j, newIds.has(j.id))).join("");
+      lastJobsById = nextById;
+    } catch (err) {
+      lastRefreshOk = false;
+      liveDot.classList.add("stale");
+      liveText.textContent = "Polling paused — " + err.message;
+    }
+  }
+
+  // Row click/keyboard: toggle detail
+  rowsEl.addEventListener("click", (e) => {
+    const copy = e.target.closest(".copy");
+    if (copy) {
+      e.stopPropagation();
+      navigator.clipboard.writeText(copy.dataset.copy);
+      copy.textContent = "copied";
+      setTimeout(() => (copy.textContent = "copy"), 1100);
+      return;
+    }
+    const row = e.target.closest(".row");
+    if (!row) return;
+    const id = Number(row.dataset.id);
+    if (openRows.has(id)) openRows.delete(id);
+    else openRows.add(id);
+    refreshJobs(false);
+  });
+  rowsEl.addEventListener("keydown", (e) => {
+    if (e.target.classList.contains("row") && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      e.target.click();
+    }
+  });
+
+  // Init
+  renderKeyState();
+  refreshJobs(false);
+  setInterval(() => refreshJobs(false), 3000);
+})();
+</script>
+</body>
+</html>
