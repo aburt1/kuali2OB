@@ -22,6 +22,7 @@ builder.Services.Configure<KualiOptions>(builder.Configuration.GetSection(KualiO
 builder.Services.Configure<BackupOptions>(builder.Configuration.GetSection(BackupOptions.SectionName));
 builder.Services.Configure<RetryOptions>(builder.Configuration.GetSection(RetryOptions.SectionName));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.SectionName));
+builder.Services.Configure<UiOptions>(builder.Configuration.GetSection(UiOptions.SectionName));
 
 builder.Services.AddSingleton<Db>();
 builder.Services.AddScoped<RetryQueue>();
@@ -50,8 +51,14 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseSerilogRequestLogging();
-app.UseDefaultFiles();
-app.UseStaticFiles();
+
+var uiEnabled = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<UiOptions>>().Value.Enabled;
+if (uiEnabled)
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
+
 app.UseMiddleware<ApiKeyMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
