@@ -64,6 +64,7 @@ app.UseMiddleware<ApiKeyMiddleware>();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 ImportEndpoint.Map(app);
 JobsEndpoint.Map(app);
+JobFilesEndpoint.Map(app);
 KualiExportCallbackEndpoint.Map(app);
 
 static IAsyncPolicy<HttpResponseMessage> GetKualiRetryPolicy()

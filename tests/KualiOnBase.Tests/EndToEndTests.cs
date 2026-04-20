@@ -213,6 +213,79 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
     }
 
     [Fact]
+    public async Task JobFile_Endpoint_ServesProducedPdf_WithInlineDisposition()
+    {
+        _factory.FakeKuali.Document = new KualiDocument(
+            Id: "doc-view",
+            SerialNumber: "0200",
+            FirstName: "View",
+            LastName: "Test",
+            SchoolId: "999",
+            Attachments: []);
+        _factory.FakeKuali.PdfBytes = System.Text.Encoding.UTF8.GetBytes("%PDF-view-fixture");
+
+        var scopedFolder = Path.Combine(_factory.Sandbox, "view-scope");
+        Directory.CreateDirectory(scopedFolder);
+
+        var url = BuildUrl(
+            documentId: "doc-view",
+            onbaseDocType: "ViewTest",
+            targetFolderPath: scopedFolder,
+            downloadMode: "pdf",
+            deleteAttachments: false);
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Add("X-Api-Key", "test-key");
+        var response = await _client.SendAsync(req);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ImportResponse>();
+
+        using var getReq = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{body!.JobId}/files/0");
+        getReq.Headers.Add("X-Api-Key", "test-key");
+        var fileResp = await _client.SendAsync(getReq);
+
+        fileResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        fileResp.Content.Headers.ContentType?.MediaType.Should().Be("application/pdf");
+        // No Content-Disposition: attachment — browser renders inline.
+        fileResp.Content.Headers.ContentDisposition?.DispositionType.Should().NotBe("attachment");
+        var bytes = await fileResp.Content.ReadAsByteArrayAsync();
+        System.Text.Encoding.UTF8.GetString(bytes).Should().Contain("%PDF-view-fixture");
+    }
+
+    [Fact]
+    public async Task JobFile_Endpoint_Rejects_IndexOutOfRange()
+    {
+        _factory.FakeKuali.Document = new KualiDocument(
+            Id: "doc-oor",
+            SerialNumber: "0201",
+            FirstName: "X", LastName: "Y", SchoolId: "1",
+            Attachments: []);
+        _factory.FakeKuali.PdfBytes = System.Text.Encoding.UTF8.GetBytes("%PDF");
+
+        var scopedFolder = Path.Combine(_factory.Sandbox, "oor-scope");
+        Directory.CreateDirectory(scopedFolder);
+
+        var url = BuildUrl("doc-oor", "DT", scopedFolder, "pdf", false);
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Add("X-Api-Key", "test-key");
+        var resp = await _client.SendAsync(req);
+        var body = await resp.Content.ReadFromJsonAsync<ImportResponse>();
+
+        using var getReq = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{body!.JobId}/files/99");
+        getReq.Headers.Add("X-Api-Key", "test-key");
+        var fileResp = await _client.SendAsync(getReq);
+        fileResp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task JobFile_Endpoint_RequiresAuth()
+    {
+        using var getReq = new HttpRequestMessage(HttpMethod.Get, "/api/jobs/1/files/0");
+        var resp = await _client.SendAsync(getReq);
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
     public async Task Missing_TargetFolder_Returns_400()
     {
         var bogus = Path.Combine(_factory.Sandbox, "does-not-exist");

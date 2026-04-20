@@ -280,12 +280,31 @@
     color: var(--muted);
     font-weight: 600;
   }
+  .detail .detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 12px;
+  }
+  .detail .detail-head h3 { margin: 0; }
+  .replay-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
   .detail .meta dl {
     display: grid;
     grid-template-columns: 140px 1fr;
     gap: 6px 12px;
     margin: 0;
   }
+  .file-link {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent);
+    cursor: pointer;
+  }
+  .file-link:hover { filter: brightness(1.2); }
   .detail .meta dt { color: var(--muted); }
   .detail .meta dd { margin: 0; font-family: var(--mono); word-break: break-all; }
   .detail .meta .error { color: var(--red); }
@@ -523,16 +542,7 @@
           </select>
         </div>
       </div>
-      <div class="grid-2">
-        <div class="field">
-          <label for="f-key1">KeywordKey1</label>
-          <input id="f-key1" value="Department" />
-        </div>
-        <div class="field">
-          <label for="f-val1">KeywordValue1</label>
-          <input id="f-val1" value="ITS" />
-        </div>
-      </div>
+      <div id="keyword-grid"></div>
       <div class="actions">
         <button type="button" class="ghost" id="import-cancel">Cancel</button>
         <button type="submit" class="primary" id="import-submit">Submit import</button>
@@ -577,14 +587,55 @@
 
   // --- Import dialog ---
   const importDialog = $("#import-dialog");
-  $("#open-import").addEventListener("click", () => {
+  const KEYWORD_SLOTS = 5;
+
+  function renderKeywordFields(prefill) {
+    const rows = [];
+    for (let i = 1; i <= KEYWORD_SLOTS; i++) {
+      const p = prefill && prefill[i - 1];
+      const k = escapeHtml(p?.key ?? (i === 1 ? "Department" : ""));
+      const v = escapeHtml(p?.value ?? (i === 1 ? "ITS" : ""));
+      rows.push(`
+        <div class="grid-2">
+          <div class="field">
+            <label for="f-key${i}">KeywordKey${i}</label>
+            <input id="f-key${i}" value="${k}" />
+          </div>
+          <div class="field">
+            <label for="f-val${i}">KeywordValue${i}</label>
+            <input id="f-val${i}" value="${v}" />
+          </div>
+        </div>
+      `);
+    }
+    $("#keyword-grid").innerHTML = rows.join("");
+  }
+
+  function openImportDialog(prefill) {
     if (!getKey()) {
       keyDialog.showModal();
       return;
     }
     $("#import-result").textContent = "";
+
+    if (prefill) {
+      $("#f-documentId").value = prefill.documentId ?? "";
+      $("#f-onbaseDocType").value = prefill.onbaseDocType ?? "";
+      $("#f-targetFolderPath").value = prefill.targetFolderPath ?? "";
+      $("#f-downloadMode").value = prefill.downloadMode ?? "pdf";
+      $("#f-deleteAttachments").value = prefill.deleteAttachments ? "true" : "false";
+      $("#f-deleteDocument").value = prefill.deleteDocument ? "true" : "false";
+      renderKeywordFields(prefill.keywords || []);
+      $("#import-title").textContent = `Replay import #${prefill.id}`;
+    } else {
+      renderKeywordFields();
+      $("#import-title").textContent = "Fire test import";
+    }
+
     importDialog.showModal();
-  });
+  }
+
+  $("#open-import").addEventListener("click", () => openImportDialog(null));
   $("#import-cancel").addEventListener("click", () => importDialog.close());
 
   $("#import-form").addEventListener("submit", async (e) => {
@@ -601,11 +652,13 @@
       deleteAttachments: $("#f-deleteAttachments").value,
       deleteDocument: $("#f-deleteDocument").value,
     });
-    const k1 = $("#f-key1").value.trim();
-    const v1 = $("#f-val1").value.trim();
-    if (k1 && v1) {
-      params.append("KeywordKey1", k1);
-      params.append("KeywordValue1", v1);
+    for (let i = 1; i <= KEYWORD_SLOTS; i++) {
+      const k = $(`#f-key${i}`)?.value.trim();
+      const v = $(`#f-val${i}`)?.value.trim();
+      if (k && v) {
+        params.append(`KeywordKey${i}`, k);
+        params.append(`KeywordValue${i}`, v);
+      }
     }
 
     try {
@@ -735,7 +788,11 @@
 
   function renderDetail(j) {
     const filesList = j.files.length
-      ? `<ul>${j.files.map((f) => `<li>${escapeHtml(f)} <button class="copy" data-copy="${escapeHtml(f)}">copy</button></li>`).join("")}</ul>`
+      ? `<ul>${j.files.map((f, i) => {
+          const name = escapeHtml(f.split(/[\\/]/).pop());
+          const pathEsc = escapeHtml(f);
+          return `<li><a href="#" class="file-link" data-job="${j.id}" data-idx="${i}" data-name="${name}" title="${pathEsc}">${name}</a> <button class="copy" data-copy="${pathEsc}">copy path</button></li>`;
+        }).join("")}</ul>`
       : `<span style="color:var(--muted)">No files produced yet.</span>`;
     const kws = j.keywords && j.keywords.length
       ? j.keywords.map((k) => `<span class="tag">${escapeHtml(k.key)}=${escapeHtml(k.value)}</span>`).join("")
@@ -746,7 +803,10 @@
     return `
       <div class="detail">
         <div class="meta">
-          <h3>Job details</h3>
+          <div class="detail-head">
+            <h3>Job details</h3>
+            <button class="ghost replay-btn" data-replay="${j.id}">Replay with changes</button>
+          </div>
           <dl>
             <dt>Created</dt><dd>${fmtRelative(j.createdAt)}<span style="color:var(--muted); margin-left:8px">${new Date(j.createdAt).toLocaleString()}</span></dd>
             <dt>Updated</dt><dd>${fmtRelative(j.updatedAt)}</dd>
@@ -833,14 +893,53 @@
     }
   }
 
+  async function openJobFile(jobId, index, name) {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/files/${index}`, {
+        headers: { "X-Api-Key": getKey() },
+      });
+      if (!res.ok) {
+        alert(`Couldn't load file (${res.status}). It may have been moved or deleted.`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      // Let the new tab take over; revoke later so it has time to load.
+      setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+      if (!win) alert("Popup blocked — allow popups for this page to preview files.");
+    } catch (err) {
+      alert("Network error: " + err.message);
+    }
+  }
+
+  function findJobById(id) {
+    return lastJobsById.get(Number(id));
+  }
+
   // Row click/keyboard: toggle detail
   rowsEl.addEventListener("click", (e) => {
+    const replay = e.target.closest(".replay-btn");
+    if (replay) {
+      e.stopPropagation();
+      const j = findJobById(replay.dataset.replay);
+      if (j) openImportDialog(j);
+      return;
+    }
+    const fileLink = e.target.closest(".file-link");
+    if (fileLink) {
+      e.preventDefault();
+      e.stopPropagation();
+      openJobFile(fileLink.dataset.job, Number(fileLink.dataset.idx), fileLink.dataset.name);
+      return;
+    }
     const copy = e.target.closest(".copy");
     if (copy) {
       e.stopPropagation();
       navigator.clipboard.writeText(copy.dataset.copy);
+      const orig = copy.textContent;
       copy.textContent = "copied";
-      setTimeout(() => (copy.textContent = "copy"), 1100);
+      setTimeout(() => (copy.textContent = orig), 1100);
       return;
     }
     const row = e.target.closest(".row");
