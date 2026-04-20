@@ -93,6 +93,7 @@ public sealed class KualiClient : IKualiClient
             {
                 id = documentId,
                 callbackUrl,
+                options = Array.Empty<string>(),
                 sendAsPost = true,
                 timeZone = _options.ExportTimeZone,
             },

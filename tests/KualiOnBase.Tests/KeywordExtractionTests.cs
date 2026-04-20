@@ -40,4 +40,24 @@ public class KeywordExtractionTests
 
         ImportEndpoint.ExtractKeywords(query).Should().BeEmpty();
     }
+
+    [Fact]
+    public void ExtractKeywords_TreatsPipeAsIgnoreSentinel()
+    {
+        var query = new QueryCollection(new Dictionary<string, StringValues>
+        {
+            ["KeywordKey1"] = "Department",
+            ["KeywordValue1"] = "ITS",
+            ["KeywordKey2"] = "|",
+            ["KeywordValue2"] = "|",
+            ["KeywordKey3"] = "Requester",
+            ["KeywordValue3"] = "|",
+            ["KeywordKey4"] = "|",
+            ["KeywordValue4"] = "Fall 2026",
+        });
+
+        var pairs = ImportEndpoint.ExtractKeywords(query);
+        pairs.Should().HaveCount(1);
+        pairs[0].Should().Be(new KeyValuePair<string, string>("Department", "ITS"));
+    }
 }

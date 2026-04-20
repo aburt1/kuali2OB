@@ -628,6 +628,7 @@
 
   // --- Jobs list ---
   const openRows = new Set();
+  const openPayloads = new Set(); // "jobId:eventIndex" strings for funnel <details> blocks
   let lastJobsById = new Map();
   let lastRefreshOk = true;
 
@@ -706,14 +707,16 @@
     return `${hh}:${mm}:${ss}`;
   }
 
-  function renderFunnel(events) {
+  function renderFunnel(jobId, events) {
     if (!events || events.length === 0) {
       return `<span class="funnel-empty">No events recorded yet.</span>`;
     }
-    const items = events.map((e) => {
+    const items = events.map((e, idx) => {
       const cls = EVENT_CLASS[e.kind] || "hollow";
+      const key = `${jobId}:${idx}`;
+      const isOpen = openPayloads.has(key);
       const payload = e.payload != null
-        ? `<details><summary>payload</summary><pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre></details>`
+        ? `<details data-payload="${key}"${isOpen ? " open" : ""}><summary>payload</summary><pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre></details>`
         : "";
       const msg = e.message
         ? `<div class="msg">${escapeHtml(e.message)}</div>`
@@ -759,7 +762,7 @@
         </div>
         <div>
           <h3>Timeline · what Kuali sent us</h3>
-          ${renderFunnel(j.events)}
+          ${renderFunnel(j.id, j.events)}
         </div>
       </div>
     `;
@@ -853,6 +856,18 @@
       e.target.click();
     }
   });
+
+  // Track which funnel <details> payload blocks are open so we can restore
+  // their state across the 3s poll re-render. `toggle` doesn't bubble, so we
+  // listen in the capture phase.
+  rowsEl.addEventListener("toggle", (e) => {
+    const d = e.target;
+    if (!(d instanceof HTMLDetailsElement)) return;
+    const k = d.dataset.payload;
+    if (!k) return;
+    if (d.open) openPayloads.add(k);
+    else openPayloads.delete(k);
+  }, true);
 
   // Init
   renderKeyState();

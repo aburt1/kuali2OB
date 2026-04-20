@@ -147,11 +147,18 @@ public static class ImportEndpoint
         {
             var key = query[$"KeywordKey{i}"].ToString();
             var value = query[$"KeywordValue{i}"].ToString();
-            if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+            if (IsIgnoreSentinel(key) || IsIgnoreSentinel(value))
             {
-                result.Add(new KeyValuePair<string, string>(key, value));
+                continue;
             }
+            result.Add(new KeyValuePair<string, string>(key, value));
         }
         return result;
     }
+
+    // Kuali Build's HTTP-Action URL editor forces a value into every token, so
+    // "unused" keyword slots get filled with a literal "|" by convention — treat
+    // it (and whitespace / empty) as the skip-this-pair sentinel.
+    private static bool IsIgnoreSentinel(string s) =>
+        string.IsNullOrWhiteSpace(s) || s.Trim() == "|";
 }

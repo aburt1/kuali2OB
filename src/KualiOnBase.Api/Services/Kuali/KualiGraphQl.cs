@@ -17,16 +17,19 @@ internal static class KualiGraphQl
 
     // exportDocument is callback-based: Kuali POSTs the signed PDF URL to callbackUrl
     // when rendering completes. Returns a job id string (not used further by us).
+    // `options` is required ([String!]!) by the schema; an empty list means "defaults".
     public const string ExportDocument = """
         mutation ExportDocument(
           $id: ID!,
           $callbackUrl: String!,
+          $options: [String!]!,
           $sendAsPost: Boolean!,
           $timeZone: String
         ) {
           exportDocument(
             id: $id,
             callbackUrl: $callbackUrl,
+            options: $options,
             sendAsPost: $sendAsPost,
             timeZone: $timeZone
           )
