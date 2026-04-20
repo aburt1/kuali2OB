@@ -9,6 +9,11 @@ RUN dotnet publish src/KualiOnBase.Api/KualiOnBase.Api.csproj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends wget \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/publish .
 
 RUN mkdir -p /data /backup /target \
