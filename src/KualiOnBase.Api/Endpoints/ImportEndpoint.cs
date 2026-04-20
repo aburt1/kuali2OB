@@ -36,6 +36,13 @@ public static class ImportEndpoint
     {
         var log = loggerFactory.CreateLogger("ImportEndpoint");
 
+        log.LogInformation(
+            "Import request received: documentId={DocumentId} onbaseDocType={OnBaseDocType} " +
+            "downloadMode={DownloadMode} pdfExport={PdfExport} deleteAttachments={DeleteAttachments} " +
+            "deleteDocument={DeleteDocument} targetFolderPath={TargetFolderPath} query={Query}",
+            documentId, onbaseDocType, downloadMode, pdfExport, deleteAttachments,
+            deleteDocument, targetFolderPath, request.QueryString.Value);
+
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(documentId)) errors.Add("documentId is required.");
         if (string.IsNullOrWhiteSpace(onbaseDocType)) errors.Add("onbaseDocType is required.");
@@ -53,6 +60,8 @@ public static class ImportEndpoint
 
         if (errors.Count > 0)
         {
+            log.LogWarning("Import request rejected (validation): {Errors} | query={Query}",
+                string.Join(" | ", errors), request.QueryString.Value);
             return Results.BadRequest(new { errors });
         }
 
