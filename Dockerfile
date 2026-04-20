@@ -19,5 +19,7 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     Database__Path=/data/kuali-onbase.db \
     Backup__RootPath=/backup
 
+VOLUME ["/data", "/backup", "/target"]
+
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "KualiOnBase.Api.dll"]
