@@ -44,7 +44,11 @@ POST https://<your-host>/api/kuali-onbase-import
 
 Headers:
   X-Api-Key: <your-auth-apikey>
+  # or equivalently:
+  Authorization: Bearer <your-auth-apikey>
 ```
+
+The API accepts the key in either header — whichever your HTTP client makes easier. Kuali Build's "Bearer authentication" option works out of the box; the dashboard and curl examples use `X-Api-Key`.
 
 ### Parameters
 

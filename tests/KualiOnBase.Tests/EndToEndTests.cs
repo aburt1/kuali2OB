@@ -112,6 +112,25 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
     }
 
     [Fact]
+    public async Task Bearer_Token_Is_Accepted()
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/kuali-onbase-import");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "test-key");
+        var response = await _client.SendAsync(req);
+        // Correct credential → middleware passes → missing-param 400, not 401.
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Bearer_Token_Wrong_Returns_401()
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/kuali-onbase-import");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "nope");
+        var response = await _client.SendAsync(req);
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
     public async Task Missing_Required_Parameters_Returns_400()
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, "/api/kuali-onbase-import");

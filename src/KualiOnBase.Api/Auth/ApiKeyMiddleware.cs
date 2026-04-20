@@ -6,6 +6,7 @@ namespace KualiOnBase.Api.Auth;
 public sealed class ApiKeyMiddleware
 {
     public const string HeaderName = "X-Api-Key";
+    public const string BearerPrefix = "Bearer ";
 
     private readonly RequestDelegate _next;
     private readonly string _expected;
@@ -31,15 +32,36 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        if (!context.Request.Headers.TryGetValue(HeaderName, out var provided)
-            || !CryptographicEquals(provided.ToString(), _expected))
+        var provided = ExtractToken(context.Request);
+        if (provided is null || !CryptographicEquals(provided, _expected))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Missing or invalid X-Api-Key header.");
+            await context.Response.WriteAsync(
+                "Missing or invalid credentials. Send the API key as either 'X-Api-Key: <key>' or 'Authorization: Bearer <key>'.");
             return;
         }
 
         await _next(context);
+    }
+
+    private static string? ExtractToken(HttpRequest request)
+    {
+        if (request.Headers.TryGetValue(HeaderName, out var apiKeyHeader))
+        {
+            var v = apiKeyHeader.ToString();
+            if (!string.IsNullOrEmpty(v)) return v;
+        }
+
+        if (request.Headers.TryGetValue("Authorization", out var auth))
+        {
+            var v = auth.ToString();
+            if (v.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return v.Substring(BearerPrefix.Length).Trim();
+            }
+        }
+
+        return null;
     }
 
     private static bool CryptographicEquals(string a, string b)

@@ -47,3 +47,6 @@ tools/kuali-schema-dump.json
 TestResults/
 coverage/
 *.trx
+
+# AI assistant artifacts
+context-snapshot.json
