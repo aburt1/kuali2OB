@@ -172,10 +172,16 @@ public sealed class KualiClient : IKualiClient
         }
     }
 
-    private (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
+    internal (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
     {
-        // Relative URL → resolve against our configured Kuali base and send authenticated.
-        if (Uri.TryCreate(url, UriKind.Relative, out _) && !Uri.TryCreate(url, UriKind.Absolute, out _))
+        // Only treat http(s) as truly absolute. On Unix, Uri.TryCreate happily parses
+        // a leading-slash path like "/app/forms/..." as a file:// URI — which is why
+        // we can't just ask IsAbsoluteUri. Anything else is a Kuali-relative path.
+        var isHttp =
+            Uri.TryCreate(url, UriKind.Absolute, out var absolute)
+            && (absolute!.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps);
+
+        if (!isHttp)
         {
             if (_http.BaseAddress is null)
             {
@@ -185,10 +191,9 @@ public sealed class KualiClient : IKualiClient
             return (new Uri(_http.BaseAddress, url.TrimStart('/')), UseAuth: true);
         }
 
-        var absolute = new Uri(url, UriKind.Absolute);
         var sameHost = _http.BaseAddress is { } baseUri
-            && string.Equals(absolute.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase);
-        return (absolute, UseAuth: sameHost);
+            && string.Equals(absolute!.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase);
+        return (absolute!, UseAuth: sameHost);
     }
 
     public async Task ClearAttachmentsAsync(
