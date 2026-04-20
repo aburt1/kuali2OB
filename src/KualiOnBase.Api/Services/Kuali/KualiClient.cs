@@ -63,7 +63,12 @@ public sealed class KualiClient : IKualiClient
 
         var attachments = ExtractAttachments(payload);
 
-        return new KualiDocument(id, serial, firstName, lastName, schoolId, attachments);
+        // Keep a snapshot of the raw data tree so the import timeline can surface
+        // it when attachment detection misses — different tenants shape file-upload
+        // fields differently and we want a diagnostic we can look at after the fact.
+        var rawDataJson = payload?.ToJsonString();
+
+        return new KualiDocument(id, serial, firstName, lastName, schoolId, attachments, rawDataJson);
     }
 
     public async Task<string> ExportPdfAsync(string documentId, CancellationToken ct)

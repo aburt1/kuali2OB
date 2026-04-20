@@ -6,7 +6,8 @@ public sealed record KualiDocument(
     string FirstName,
     string LastName,
     string SchoolId,
-    IReadOnlyList<KualiAttachment> Attachments);
+    IReadOnlyList<KualiAttachment> Attachments,
+    string? RawDataJson = null);
 
 public sealed record KualiAttachment(
     string Id,

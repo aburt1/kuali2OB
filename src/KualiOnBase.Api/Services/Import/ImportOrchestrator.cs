@@ -60,6 +60,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
                     a.FileName,
                     a.Url,
                 }),
+                RawData = ParseRawData(document.RawDataJson),
             },
             ct);
 
@@ -71,7 +72,10 @@ public sealed class ImportOrchestrator : IImportOrchestrator
             var stagedFiles = await DownloadAsync(job, document, mode, tempRoot, ct);
             if (stagedFiles.Count == 0)
             {
-                throw new InvalidOperationException("No files were produced for this import.");
+                var detail = mode == DownloadMode.Attachments
+                    ? $"Download mode was 'attachments' but the Kuali document returned 0 attachments. Either the form has no uploaded files or the attachment fields aren't in a shape the walker recognizes (see DocumentFetched → RawData payload above)."
+                    : "No files were produced for this import.";
+                throw new InvalidOperationException(detail);
             }
 
             var externalSourceRefBase = !string.IsNullOrWhiteSpace(document.SerialNumber)
@@ -279,4 +283,14 @@ public sealed class ImportOrchestrator : IImportOrchestrator
     }
 
     private sealed record KeywordDto(string Key, string Value);
+
+    // The raw-data JSON lives inside another JSON payload (the event payload),
+    // so we parse it once to a JsonNode to keep it as a real object — otherwise
+    // the viewer sees an escaped string-of-JSON and can't drill into it.
+    private static System.Text.Json.Nodes.JsonNode? ParseRawData(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.Nodes.JsonNode.Parse(json); }
+        catch { return null; }
+    }
 }
