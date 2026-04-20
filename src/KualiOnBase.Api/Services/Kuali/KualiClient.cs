@@ -133,21 +133,62 @@ public sealed class KualiClient : IKualiClient
 
     public async Task DownloadToFileAsync(string url, string destinationPath, CancellationToken ct)
     {
-        // Signed URLs from Kuali carry their own auth; send them through a bare HttpClient
-        // so we do not leak our Bearer token to arbitrary hosts.
-        using var bareClient = new HttpClient();
-        using var response = await bareClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+        // Two URL shapes land here:
+        //   1. Absolute external URLs (e.g. S3 signed URLs returned from exportDocument).
+        //      These carry their own auth — we must NOT forward our Bearer token.
+        //   2. Relative or same-host Kuali URLs (e.g. attachment permaLink / temporaryUrl).
+        //      These live behind Kuali auth and need our Bearer token.
+        var (requestUri, useAuth) = ResolveDownloadUrl(url);
 
-        var dir = Path.GetDirectoryName(destinationPath);
-        if (!string.IsNullOrEmpty(dir))
+        HttpResponseMessage response;
+        if (useAuth)
         {
-            Directory.CreateDirectory(dir);
+            using var req = new HttpRequestMessage(HttpMethod.Get, requestUri);
+            response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+        else
+        {
+            using var bareClient = new HttpClient();
+            response = await bareClient.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct);
         }
 
-        await using var src = await response.Content.ReadAsStreamAsync(ct);
-        await using var dst = File.Create(destinationPath);
-        await src.CopyToAsync(dst, ct);
+        try
+        {
+            response.EnsureSuccessStatusCode();
+
+            var dir = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            await using var src = await response.Content.ReadAsStreamAsync(ct);
+            await using var dst = File.Create(destinationPath);
+            await src.CopyToAsync(dst, ct);
+        }
+        finally
+        {
+            response.Dispose();
+        }
+    }
+
+    private (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
+    {
+        // Relative URL → resolve against our configured Kuali base and send authenticated.
+        if (Uri.TryCreate(url, UriKind.Relative, out _) && !Uri.TryCreate(url, UriKind.Absolute, out _))
+        {
+            if (_http.BaseAddress is null)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot resolve relative Kuali URL '{url}' — Kuali:BaseUrl is not configured.");
+            }
+            return (new Uri(_http.BaseAddress, url.TrimStart('/')), UseAuth: true);
+        }
+
+        var absolute = new Uri(url, UriKind.Absolute);
+        var sameHost = _http.BaseAddress is { } baseUri
+            && string.Equals(absolute.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase);
+        return (absolute, UseAuth: sameHost);
     }
 
     public async Task ClearAttachmentsAsync(
@@ -222,7 +263,7 @@ public sealed class KualiClient : IKualiClient
         return value is null ? null : value.ToString();
     }
 
-    private static IReadOnlyList<KualiAttachment> ExtractAttachments(JsonObject? data)
+    internal static IReadOnlyList<KualiAttachment> ExtractAttachments(JsonObject? data)
     {
         var result = new List<KualiAttachment>();
         if (data is null)
@@ -267,11 +308,19 @@ public sealed class KualiClient : IKualiClient
             obj["filename"]?.GetValue<string>()
             ?? obj["fileName"]?.GetValue<string>()
             ?? obj["name"]?.GetValue<string>();
+        // Kuali Build's file-upload field stores a `permaLink` (JWT-carrying,
+        // doesn't expire) and a `temporaryUrl`. Prefer permaLink. We also accept
+        // the generic url / downloadUrl / href keys for other possible shapes.
         var url =
-            obj["url"]?.GetValue<string>()
+            obj["permaLink"]?.GetValue<string>()
+            ?? obj["temporaryUrl"]?.GetValue<string>()
+            ?? obj["url"]?.GetValue<string>()
             ?? obj["downloadUrl"]?.GetValue<string>()
             ?? obj["href"]?.GetValue<string>();
-        var id = obj["id"]?.GetValue<string>() ?? path;
+        var id =
+            obj["id"]?.GetValue<string>()
+            ?? obj["retrievalId"]?.GetValue<string>()
+            ?? path;
 
         if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(url))
         {
