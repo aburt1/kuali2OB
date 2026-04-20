@@ -27,7 +27,6 @@ public static class ImportEndpoint
         [FromQuery] string? downloadMode,
         [FromQuery] bool? deleteAttachments,
         [FromQuery] bool? deleteDocument,
-        [FromQuery] string? pdfExport,
         RetryQueue queue,
         IImportOrchestrator orchestrator,
         IOptions<RetryOptions> retry,
@@ -38,9 +37,9 @@ public static class ImportEndpoint
 
         log.LogInformation(
             "Import request received: documentId={DocumentId} onbaseDocType={OnBaseDocType} " +
-            "downloadMode={DownloadMode} pdfExport={PdfExport} deleteAttachments={DeleteAttachments} " +
+            "downloadMode={DownloadMode} deleteAttachments={DeleteAttachments} " +
             "deleteDocument={DeleteDocument} targetFolderPath={TargetFolderPath} query={Query}",
-            documentId, onbaseDocType, downloadMode, pdfExport, deleteAttachments,
+            documentId, onbaseDocType, downloadMode, deleteAttachments,
             deleteDocument, targetFolderPath, request.QueryString.Value);
 
         var errors = new List<string>();
@@ -53,23 +52,9 @@ public static class ImportEndpoint
         }
         else if (!DownloadModes.TryParse(downloadMode, out _))
         {
-            // Common confusion: Form / Combined / Attachments are pdfExport values,
-            // not downloadMode values. Nudge the caller toward the right param.
-            var hint = LooksLikePdfExportValue(downloadMode)
-                ? $" (it looks like '{downloadMode}' is a pdfExport value — did you mean downloadMode=pdf and pdfExport={downloadMode}?)"
-                : "";
-            errors.Add($"downloadMode must be one of: pdf, attachments, all.{hint}");
+            errors.Add("downloadMode must be one of: form, combined, attachments.");
         }
         if (deleteAttachments is null) errors.Add("deleteAttachments is required.");
-
-        string? canonicalPdfExport = null;
-        if (!PdfExportOptions.TryNormalize(pdfExport, out canonicalPdfExport))
-        {
-            var hint = DownloadModes.TryParse(pdfExport ?? "", out _)
-                ? $" (it looks like '{pdfExport}' is a downloadMode value — did you mean downloadMode={pdfExport}?)"
-                : "";
-            errors.Add($"pdfExport must be one of: Form, Combined, Attachments (or omitted).{hint}");
-        }
 
         if (errors.Count > 0)
         {
@@ -89,7 +74,6 @@ public static class ImportEndpoint
             DeleteAttachments = deleteAttachments ?? false,
             DeleteDocument = deleteDocument ?? false,
             KeywordsJson = JsonSerializer.Serialize(keywords),
-            PdfExport = canonicalPdfExport,
             Status = JobStatus.Running,
             AttemptCount = 1,
         };
@@ -151,9 +135,6 @@ public static class ImportEndpoint
     // which makes them readable in Kuali's "response data" dialog.
     private static IResult TextError(int status, string message) =>
         Results.Text(message, contentType: "text/plain; charset=utf-8", statusCode: status);
-
-    private static bool LooksLikePdfExportValue(string? s) =>
-        PdfExportOptions.TryNormalize(s, out var canon) && canon is not null;
 
     private static bool IsTransient(Exception ex) => ex switch
     {

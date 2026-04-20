@@ -24,11 +24,17 @@ public sealed record ImportRequest
     public bool DeleteDocument { get; init; }
 }
 
+// form        → Kuali exportDocument(Form) → 1 PDF (form render only)
+// combined    → Kuali exportDocument(Combined) → 1 PDF (form + attachments merged).
+//               NOTE: Kuali can only merge PDF attachments. Non-PDF uploads on the
+//               source document will make this mode fail — use `attachments` instead.
+// attachments → raw attachment files downloaded directly, preserving original
+//               formats (.docx/.jpg/.xlsx/…). N files out (one per attachment).
 public enum DownloadMode
 {
-    Pdf,
+    Form,
+    Combined,
     Attachments,
-    All,
 }
 
 public static class DownloadModes
@@ -37,36 +43,19 @@ public static class DownloadModes
     {
         switch (value?.Trim().ToLowerInvariant())
         {
-            case "pdf": mode = DownloadMode.Pdf; return true;
+            case "form": mode = DownloadMode.Form; return true;
+            case "combined": mode = DownloadMode.Combined; return true;
             case "attachments": mode = DownloadMode.Attachments; return true;
-            case "all": mode = DownloadMode.All; return true;
             default: mode = default; return false;
         }
     }
-}
 
-// Maps 1:1 to values Kuali's exportDocument mutation accepts in its
-// `options` array. Passing null / empty on the wire leaves the array empty
-// and Kuali uses its tenant default (typically Combined).
-public static class PdfExportOptions
-{
-    public const string Form = "Form";
-    public const string Combined = "Combined";
-    public const string Attachments = "Attachments";
-
-    public static bool TryNormalize(string? value, out string? canonical)
+    // Canonical value sent to Kuali in the `options: [String!]!` array.
+    public static string ToKualiOption(DownloadMode mode) => mode switch
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            canonical = null;
-            return true;
-        }
-        switch (value.Trim().ToLowerInvariant())
-        {
-            case "form": canonical = Form; return true;
-            case "combined": canonical = Combined; return true;
-            case "attachments": canonical = Attachments; return true;
-            default: canonical = null; return false;
-        }
-    }
+        DownloadMode.Form => "Form",
+        DownloadMode.Combined => "Combined",
+        DownloadMode.Attachments => "Attachments",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+    };
 }

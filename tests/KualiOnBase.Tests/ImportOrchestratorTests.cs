@@ -38,9 +38,9 @@ public class ImportOrchestratorTests : IDisposable
     private string BackupRoot => Path.Combine(_sandbox, "backup");
 
     [Fact]
-    public async Task Run_PdfMode_WritesPdfAndIndex()
+    public async Task Run_FormMode_WritesPdfAndIndex()
     {
-        var job = BuildJob("pdf");
+        var job = BuildJob("form");
 
         var result = await _sut.RunAsync(job, CancellationToken.None);
 
@@ -58,37 +58,58 @@ public class ImportOrchestratorTests : IDisposable
         text.Should().Contain("EXTERNAL_SOURCE_REF: 0014");
     }
 
-    [Fact]
-    public async Task Run_AllMode_WritesPdfPlusEachAttachmentWithUniqueNames()
+    [Theory]
+    [InlineData("form", "Form")]
+    [InlineData("combined", "Combined")]
+    public async Task Run_FormAndCombined_MapToKualiExportOption(string mode, string expectedOption)
     {
+        var job = BuildJob(mode);
+
+        await _sut.RunAsync(job, CancellationToken.None);
+
+        _kuali.LastExportOption.Should().Be(expectedOption);
+    }
+
+    [Fact]
+    public async Task Run_AttachmentsMode_DownloadsRawFiles_PreservesExtensions()
+    {
+        // Kuali's 'Attachments' export only works when every attachment is a PDF.
+        // Raw download path preserves the user's original formats (.docx, .jpg, …).
         _kuali.Document = _kuali.Document with
         {
             Attachments =
             [
-                new KualiAttachment("a1", "data.form.uploads[0]", "scan.pdf", "https://fake/a1"),
+                new KualiAttachment("a1", "data.form.uploads[0]", "resume.docx", "https://fake/a1"),
                 new KualiAttachment("a2", "data.form.uploads[1]", "scan.pdf", "https://fake/a2"),
             ],
         };
         _kuali.AttachmentBytes["https://fake/a1"] = [1, 2, 3];
         _kuali.AttachmentBytes["https://fake/a2"] = [4, 5, 6];
 
-        var job = BuildJob("all");
+        var job = BuildJob("attachments");
 
         var result = await _sut.RunAsync(job, CancellationToken.None);
 
-        // PDF + 2 attachments + 1 index
-        result.ProducedFiles.Should().HaveCount(4);
+        _kuali.LastExportOption.Should().BeNull("attachments mode must not call ExportPdfAsync");
 
         var contentFiles = Directory.EnumerateFiles(TargetFolder)
             .Where(p => !p.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
             .Select(Path.GetFileName)
             .ToList();
-        contentFiles.Select(n => n!).Distinct(StringComparer.OrdinalIgnoreCase).Count()
-            .Should().Be(contentFiles.Count, "filenames should be de-duped");
+        contentFiles.Should().HaveCount(2);
+        contentFiles.Should().Contain(n => n!.EndsWith(".docx", StringComparison.OrdinalIgnoreCase));
+        contentFiles.Should().Contain(n => n!.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+    }
 
-        var indexFile = Directory.EnumerateFiles(TargetFolder, "*.txt").Single();
-        var text = await File.ReadAllTextAsync(indexFile);
-        text.Split("ONBASE_DOC_TYPE:").Length.Should().Be(4); // 3 blocks + 1 pre-split empty
+    [Fact]
+    public async Task Run_AttachmentsMode_NoAttachments_ThrowsDescriptiveError()
+    {
+        _kuali.Document = _kuali.Document with { Attachments = [] };
+        var job = BuildJob("attachments");
+
+        var act = () => _sut.RunAsync(job, CancellationToken.None);
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        ex.Which.Message.Should().Contain("0 attachments");
     }
 
     [Fact]
@@ -98,9 +119,8 @@ public class ImportOrchestratorTests : IDisposable
         {
             Attachments = [new KualiAttachment("a", "data.uploads", "x.pdf", "https://fake/a")],
         };
-        _kuali.AttachmentBytes["https://fake/a"] = [9];
 
-        var job = BuildJob("all", deleteAttachments: true);
+        var job = BuildJob("combined", deleteAttachments: true);
 
         await _sut.RunAsync(job, CancellationToken.None);
 
@@ -112,7 +132,7 @@ public class ImportOrchestratorTests : IDisposable
     [Fact]
     public async Task Run_DeleteDocumentFlag_CallsDeleteDocument()
     {
-        var job = BuildJob("pdf", deleteDocument: true);
+        var job = BuildJob("form", deleteDocument: true);
         await _sut.RunAsync(job, CancellationToken.None);
         _kuali.DocumentDeleted.Should().BeTrue();
     }
@@ -120,7 +140,7 @@ public class ImportOrchestratorTests : IDisposable
     [Fact]
     public async Task Run_TargetFolderMissing_Throws()
     {
-        var job = BuildJob("pdf");
+        var job = BuildJob("form");
         job.TargetFolderPath = Path.Combine(_sandbox, "does-not-exist");
 
         var act = () => _sut.RunAsync(job, CancellationToken.None);
@@ -131,35 +151,16 @@ public class ImportOrchestratorTests : IDisposable
     public async Task Run_TransientKualiFailure_Propagates()
     {
         _kuali.ExportPdfThrows = new HttpRequestException("boom");
-        var job = BuildJob("pdf");
+        var job = BuildJob("form");
 
         var act = () => _sut.RunAsync(job, CancellationToken.None);
         await act.Should().ThrowAsync<HttpRequestException>();
     }
 
     [Fact]
-    public async Task Run_PassesPdfExportOption_ThroughToKualiClient()
-    {
-        var job = BuildJob("pdf");
-        job.PdfExport = "Combined";
-
-        await _sut.RunAsync(job, CancellationToken.None);
-
-        _kuali.LastExportOption.Should().Be("Combined");
-    }
-
-    [Fact]
-    public async Task Run_NullPdfExport_PassesNullToClient()
-    {
-        var job = BuildJob("pdf");
-        await _sut.RunAsync(job, CancellationToken.None);
-        _kuali.LastExportOption.Should().BeNull();
-    }
-
-    [Fact]
     public async Task Run_WritesKeywordsFromJobIntoIndex()
     {
-        var job = BuildJob("pdf");
+        var job = BuildJob("form");
         job.KeywordsJson = JsonSerializer.Serialize(new[]
         {
             new { Key = "Department", Value = "ITS" },

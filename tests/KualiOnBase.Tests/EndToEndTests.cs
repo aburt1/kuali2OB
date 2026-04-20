@@ -155,7 +155,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
             documentId: "doc-happy",
             onbaseDocType: "IT - Access",
             targetFolderPath: _factory.TargetFolder,
-            downloadMode: "pdf",
+            downloadMode: "form",
             deleteAttachments: false,
             extra: new Dictionary<string, string>
             {
@@ -191,7 +191,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
             documentId: "doc-transient",
             onbaseDocType: "DocType",
             targetFolderPath: _factory.TargetFolder,
-            downloadMode: "pdf",
+            downloadMode: "form",
             deleteAttachments: false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
@@ -231,7 +231,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
             documentId: "doc-view",
             onbaseDocType: "ViewTest",
             targetFolderPath: scopedFolder,
-            downloadMode: "pdf",
+            downloadMode: "form",
             deleteAttachments: false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
@@ -265,7 +265,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
         var scopedFolder = Path.Combine(_factory.Sandbox, "oor-scope");
         Directory.CreateDirectory(scopedFolder);
 
-        var url = BuildUrl("doc-oor", "DT", scopedFolder, "pdf", false);
+        var url = BuildUrl("doc-oor", "DT", scopedFolder, "form", false);
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
         req.Headers.Add("X-Api-Key", "test-key");
         var resp = await _client.SendAsync(req);
@@ -292,7 +292,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
             documentId: "doc-x",
             onbaseDocType: "DT",
             targetFolderPath: _factory.TargetFolder,
-            downloadMode: "form", // wrong field — should nudge toward pdfExport
+            downloadMode: "bogus",
             deleteAttachments: false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
@@ -302,8 +302,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         response.Content.Headers.ContentType?.MediaType.Should().Be("text/plain");
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("downloadMode must be one of: pdf, attachments, all.");
-        body.Should().Contain("did you mean downloadMode=pdf and pdfExport=form");
+        body.Should().Contain("downloadMode must be one of: form, combined, attachments.");
         body.Should().NotContain("[object Object]");
     }
 
@@ -315,7 +314,7 @@ public class EndToEndTests : IClassFixture<KualiOnBaseFactory>
             documentId: "doc-x",
             onbaseDocType: "DT",
             targetFolderPath: bogus,
-            downloadMode: "pdf",
+            downloadMode: "form",
             deleteAttachments: false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);

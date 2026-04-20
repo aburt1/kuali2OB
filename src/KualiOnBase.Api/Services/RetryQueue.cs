@@ -21,11 +21,11 @@ public sealed class RetryQueue
         const string sql = """
             INSERT INTO ImportJobs
                 (DocumentId, OnBaseDocType, TargetFolderPath, DownloadMode,
-                 DeleteAttachments, DeleteDocument, KeywordsJson, PdfExport, Status,
+                 DeleteAttachments, DeleteDocument, KeywordsJson, Status,
                  AttemptCount, NextAttemptAt, LastError, BackupFolderPath,
                  ProducedFiles, CreatedAt, UpdatedAt)
             VALUES (@DocumentId, @OnBaseDocType, @TargetFolderPath, @DownloadMode,
-                    @DeleteAttachments, @DeleteDocument, @KeywordsJson, @PdfExport, @Status,
+                    @DeleteAttachments, @DeleteDocument, @KeywordsJson, @Status,
                     @AttemptCount, @NextAttemptAt, @LastError, @BackupFolderPath,
                     @ProducedFiles, @CreatedAt, @UpdatedAt);
             SELECT last_insert_rowid();

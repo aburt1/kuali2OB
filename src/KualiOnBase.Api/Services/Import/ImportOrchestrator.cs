@@ -29,7 +29,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         if (!DownloadModes.TryParse(job.DownloadMode, out var mode))
         {
             throw new ArgumentException(
-                $"Invalid downloadMode '{job.DownloadMode}'. Expected pdf|attachments|all.");
+                $"Invalid downloadMode '{job.DownloadMode}'. Expected form|combined|attachments.");
         }
 
         if (!Directory.Exists(job.TargetFolderPath))
@@ -73,7 +73,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
             if (stagedFiles.Count == 0)
             {
                 var detail = mode == DownloadMode.Attachments
-                    ? $"Download mode was 'attachments' but the Kuali document returned 0 attachments. Either the form has no uploaded files or the attachment fields aren't in a shape the walker recognizes (see DocumentFetched → RawData payload above)."
+                    ? "Download mode was 'attachments' but the Kuali document returned 0 attachments. Either the form has no uploaded files or the attachment fields aren't in a shape the walker recognizes (see DocumentFetched → RawData payload above)."
                     : "No files were produced for this import.";
                 throw new InvalidOperationException(detail);
             }
@@ -181,54 +181,63 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         string tempRoot,
         CancellationToken ct)
     {
-        var files = new List<string>();
-
-        if (mode is DownloadMode.Pdf or DownloadMode.All)
+        // `attachments` downloads raw files so mixed-format uploads (.docx, .jpg, …)
+        // survive intact. `form` and `combined` go through Kuali's exportDocument,
+        // which always returns a single merged PDF — `combined` requires every
+        // attachment to be a PDF (Kuali limitation; propagated as a Kuali error).
+        if (mode == DownloadMode.Attachments)
         {
-            await _events.LogAsync(job.Id, JobEventKind.ExportRequested,
-                $"requesting PDF export for {document.Id}" +
-                    (string.IsNullOrWhiteSpace(job.PdfExport) ? "" : $" (option={job.PdfExport})"),
-                new { document.Id, job.PdfExport },
-                ct);
-
-            var url = await _kuali.ExportPdfAsync(document.Id, job.PdfExport, ct);
-
-            await _events.LogAsync(job.Id, JobEventKind.ExportCallbackReceived,
-                "signed URL received",
-                new { SignedUrl = url },
-                ct);
-
-            var pdfPath = Path.Combine(tempRoot, $"form-{document.Id}.pdf");
-            await _kuali.DownloadToFileAsync(url, pdfPath, ct);
-            var size = new FileInfo(pdfPath).Length;
-
-            await _events.LogAsync(job.Id, JobEventKind.PdfDownloaded,
-                $"{size:N0} bytes",
-                new { Path = pdfPath, Bytes = size },
-                ct);
-
-            files.Add(pdfPath);
+            return await DownloadRawAttachmentsAsync(job, document, tempRoot, ct);
         }
 
-        if (mode is DownloadMode.Attachments or DownloadMode.All)
+        var kualiOption = DownloadModes.ToKualiOption(mode);
+
+        await _events.LogAsync(job.Id, JobEventKind.ExportRequested,
+            $"requesting Kuali export for {document.Id} (option={kualiOption})",
+            new { document.Id, Option = kualiOption },
+            ct);
+
+        var url = await _kuali.ExportPdfAsync(document.Id, kualiOption, ct);
+
+        await _events.LogAsync(job.Id, JobEventKind.ExportCallbackReceived,
+            "signed URL received",
+            new { SignedUrl = url },
+            ct);
+
+        var pdfPath = Path.Combine(tempRoot, $"export-{document.Id}.pdf");
+        await _kuali.DownloadToFileAsync(url, pdfPath, ct);
+        var size = new FileInfo(pdfPath).Length;
+
+        await _events.LogAsync(job.Id, JobEventKind.PdfDownloaded,
+            $"{size:N0} bytes",
+            new { Path = pdfPath, Bytes = size },
+            ct);
+
+        return new List<string> { pdfPath };
+    }
+
+    private async Task<List<string>> DownloadRawAttachmentsAsync(
+        ImportJob job,
+        KualiDocument document,
+        string tempRoot,
+        CancellationToken ct)
+    {
+        var files = new List<string>(document.Attachments.Count);
+        for (var i = 0; i < document.Attachments.Count; i++)
         {
-            for (var i = 0; i < document.Attachments.Count; i++)
-            {
-                var att = document.Attachments[i];
-                var ext = Path.GetExtension(att.FileName);
-                var local = Path.Combine(tempRoot, $"attach-{i}{ext}");
-                await _kuali.DownloadToFileAsync(att.Url, local, ct);
-                var size = new FileInfo(local).Length;
+            var att = document.Attachments[i];
+            var ext = Path.GetExtension(att.FileName);
+            var local = Path.Combine(tempRoot, $"attach-{i}{ext}");
+            await _kuali.DownloadToFileAsync(att.Url, local, ct);
+            var size = new FileInfo(local).Length;
 
-                await _events.LogAsync(job.Id, JobEventKind.AttachmentDownloaded,
-                    $"{att.FileName} ({size:N0} bytes)",
-                    new { att.FieldPath, att.FileName, att.Url, Bytes = size },
-                    ct);
+            await _events.LogAsync(job.Id, JobEventKind.AttachmentDownloaded,
+                $"{att.FileName} ({size:N0} bytes)",
+                new { att.FieldPath, att.FileName, att.Url, Bytes = size },
+                ct);
 
-                files.Add(local);
-            }
+            files.Add(local);
         }
-
         return files;
     }
 
