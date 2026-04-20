@@ -17,7 +17,9 @@ artifacts/
 .DS_Store
 
 # Runtime state — NEVER commit these
-data/
+# Anchored to repo root so src/KualiOnBase.Api/Data/ (source folder) isn't excluded
+# on case-insensitive filesystems (Windows/macOS).
+/data/
 *.db
 *.db-journal
 *.db-shm
