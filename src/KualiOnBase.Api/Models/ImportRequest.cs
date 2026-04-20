@@ -44,3 +44,29 @@ public static class DownloadModes
         }
     }
 }
+
+// Maps 1:1 to values Kuali's exportDocument mutation accepts in its
+// `options` array. Passing null / empty on the wire leaves the array empty
+// and Kuali uses its tenant default (typically Combined).
+public static class PdfExportOptions
+{
+    public const string Form = "Form";
+    public const string Combined = "Combined";
+    public const string Attachments = "Attachments";
+
+    public static bool TryNormalize(string? value, out string? canonical)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            canonical = null;
+            return true;
+        }
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "form": canonical = Form; return true;
+            case "combined": canonical = Combined; return true;
+            case "attachments": canonical = Attachments; return true;
+            default: canonical = null; return false;
+        }
+    }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE ImportJobs ADD COLUMN PdfExport TEXT;

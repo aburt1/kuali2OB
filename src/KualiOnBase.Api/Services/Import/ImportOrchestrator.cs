@@ -186,11 +186,12 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         if (mode is DownloadMode.Pdf or DownloadMode.All)
         {
             await _events.LogAsync(job.Id, JobEventKind.ExportRequested,
-                $"requesting PDF export for {document.Id}",
-                new { document.Id },
+                $"requesting PDF export for {document.Id}" +
+                    (string.IsNullOrWhiteSpace(job.PdfExport) ? "" : $" (option={job.PdfExport})"),
+                new { document.Id, job.PdfExport },
                 ct);
 
-            var url = await _kuali.ExportPdfAsync(document.Id, ct);
+            var url = await _kuali.ExportPdfAsync(document.Id, job.PdfExport, ct);
 
             await _events.LogAsync(job.Id, JobEventKind.ExportCallbackReceived,
                 "signed URL received",

@@ -10,6 +10,7 @@ public sealed class ImportJob
     public bool DeleteAttachments { get; set; }
     public bool DeleteDocument { get; set; }
     public string? KeywordsJson { get; set; }
+    public string? PdfExport { get; set; }
     public string Status { get; set; } = JobStatus.Running;
     public int AttemptCount { get; set; }
     public DateTime? NextAttemptAt { get; set; }

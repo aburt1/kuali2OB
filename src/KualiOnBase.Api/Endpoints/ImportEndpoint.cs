@@ -27,6 +27,7 @@ public static class ImportEndpoint
         [FromQuery] string? downloadMode,
         [FromQuery] bool? deleteAttachments,
         [FromQuery] bool? deleteDocument,
+        [FromQuery] string? pdfExport,
         RetryQueue queue,
         IImportOrchestrator orchestrator,
         IOptions<RetryOptions> retry,
@@ -44,6 +45,12 @@ public static class ImportEndpoint
             errors.Add("downloadMode must be one of: pdf, attachments, all.");
         if (deleteAttachments is null) errors.Add("deleteAttachments is required.");
 
+        string? canonicalPdfExport = null;
+        if (!PdfExportOptions.TryNormalize(pdfExport, out canonicalPdfExport))
+        {
+            errors.Add("pdfExport must be one of: Form, Combined, Attachments (or omitted).");
+        }
+
         if (errors.Count > 0)
         {
             return Results.BadRequest(new { errors });
@@ -60,6 +67,7 @@ public static class ImportEndpoint
             DeleteAttachments = deleteAttachments ?? false,
             DeleteDocument = deleteDocument ?? false,
             KeywordsJson = JsonSerializer.Serialize(keywords),
+            PdfExport = canonicalPdfExport,
             Status = JobStatus.Running,
             AttemptCount = 1,
         };

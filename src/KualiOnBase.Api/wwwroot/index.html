@@ -542,6 +542,15 @@
           </select>
         </div>
       </div>
+      <div class="field">
+        <label for="f-pdfExport">pdfExport <span class="hint">(only used when downloadMode includes pdf)</span></label>
+        <select id="f-pdfExport">
+          <option value="" selected>(tenant default)</option>
+          <option value="Form">Form — just the form render</option>
+          <option value="Combined">Combined — form + attachments merged</option>
+          <option value="Attachments">Attachments — attachments stitched, no form</option>
+        </select>
+      </div>
       <div id="keyword-grid"></div>
       <div class="actions">
         <button type="button" class="ghost" id="import-cancel">Cancel</button>
@@ -625,9 +634,11 @@
       $("#f-downloadMode").value = prefill.downloadMode ?? "pdf";
       $("#f-deleteAttachments").value = prefill.deleteAttachments ? "true" : "false";
       $("#f-deleteDocument").value = prefill.deleteDocument ? "true" : "false";
+      $("#f-pdfExport").value = prefill.pdfExport ?? "";
       renderKeywordFields(prefill.keywords || []);
       $("#import-title").textContent = `Replay import #${prefill.id}`;
     } else {
+      $("#f-pdfExport").value = "";
       renderKeywordFields();
       $("#import-title").textContent = "Fire test import";
     }
@@ -652,6 +663,8 @@
       deleteAttachments: $("#f-deleteAttachments").value,
       deleteDocument: $("#f-deleteDocument").value,
     });
+    const pdfExport = $("#f-pdfExport").value;
+    if (pdfExport) params.append("pdfExport", pdfExport);
     for (let i = 1; i <= KEYWORD_SLOTS; i++) {
       const k = $(`#f-key${i}`)?.value.trim();
       const v = $(`#f-val${i}`)?.value.trim();
@@ -814,6 +827,7 @@
             <dt>Keywords</dt><dd>${kws}</dd>
             <dt>Delete attachments</dt><dd>${j.deleteAttachments ? "yes" : "no"}</dd>
             <dt>Delete document</dt><dd>${j.deleteDocument ? "yes" : "no"}</dd>
+            <dt>PDF export</dt><dd>${j.pdfExport ? escapeHtml(j.pdfExport) : '<span style="color:var(--muted)">tenant default</span>'}</dd>
             <dt>Backup folder</dt><dd>${j.backupFolderPath ? escapeHtml(j.backupFolderPath) + ` <button class="copy" data-copy="${escapeHtml(j.backupFolderPath)}">copy</button>` : '<span style="color:var(--muted)">—</span>'}</dd>
             <dt>Files produced</dt><dd>${filesList}</dd>
             ${attemptLine}

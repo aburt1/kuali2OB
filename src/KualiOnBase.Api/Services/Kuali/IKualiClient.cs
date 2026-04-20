@@ -6,7 +6,9 @@ public interface IKualiClient
 {
     Task<KualiDocument> GetDocumentAsync(string documentId, CancellationToken ct);
 
-    Task<string> ExportPdfAsync(string documentId, CancellationToken ct);
+    // `exportOption` maps to a single entry in Kuali's `options: [String!]!` array
+     // (Form | Combined | Attachments). Pass null for tenant default (empty array).
+    Task<string> ExportPdfAsync(string documentId, string? exportOption, CancellationToken ct);
 
     Task DownloadToFileAsync(string url, string destinationPath, CancellationToken ct);
 

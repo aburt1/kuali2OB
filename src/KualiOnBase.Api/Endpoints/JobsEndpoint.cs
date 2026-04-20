@@ -32,6 +32,7 @@ public static class JobsEndpoint
                     downloadMode = r.DownloadMode,
                     deleteAttachments = r.DeleteAttachments,
                     deleteDocument = r.DeleteDocument,
+                    pdfExport = r.PdfExport,
                     status = r.Status,
                     attemptCount = r.AttemptCount,
                     nextAttemptAt = r.NextAttemptAt,

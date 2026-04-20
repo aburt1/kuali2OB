@@ -138,6 +138,25 @@ public class ImportOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Run_PassesPdfExportOption_ThroughToKualiClient()
+    {
+        var job = BuildJob("pdf");
+        job.PdfExport = "Combined";
+
+        await _sut.RunAsync(job, CancellationToken.None);
+
+        _kuali.LastExportOption.Should().Be("Combined");
+    }
+
+    [Fact]
+    public async Task Run_NullPdfExport_PassesNullToClient()
+    {
+        var job = BuildJob("pdf");
+        await _sut.RunAsync(job, CancellationToken.None);
+        _kuali.LastExportOption.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Run_WritesKeywordsFromJobIntoIndex()
     {
         var job = BuildJob("pdf");
