@@ -71,7 +71,7 @@ public sealed class KualiClient : IKualiClient
         return new KualiDocument(id, serial, firstName, lastName, schoolId, attachments, rawDataJson);
     }
 
-    public async Task<string> ExportPdfAsync(string documentId, string? exportOption, CancellationToken ct)
+    public async Task<string> ExportPdfAsync(string documentId, IReadOnlyList<string> exportOptions, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_options.PublicBaseUrl))
         {
@@ -92,17 +92,13 @@ public sealed class KualiClient : IKualiClient
         var callbackUrl =
             $"{_options.PublicBaseUrl.TrimEnd('/')}/kuali-export-callback/{correlationId}?sig={sig}";
 
-        var options = string.IsNullOrWhiteSpace(exportOption)
-            ? Array.Empty<string>()
-            : new[] { exportOption };
-
         await ExecuteAsync(
             KualiGraphQl.ExportDocument,
             new
             {
                 id = documentId,
                 callbackUrl,
-                options,
+                options = exportOptions,
                 sendAsPost = true,
                 timeZone = _options.ExportTimeZone,
             },

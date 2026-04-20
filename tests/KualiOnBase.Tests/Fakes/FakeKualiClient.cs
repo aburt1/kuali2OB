@@ -17,14 +17,14 @@ public sealed class FakeKualiClient : IKualiClient
     public List<string> ClearedFieldPaths { get; } = new();
 
     public Exception? ExportPdfThrows { get; set; }
-    public string? LastExportOption { get; private set; }
+    public IReadOnlyList<string>? LastExportOptions { get; private set; }
 
     public Task<KualiDocument> GetDocumentAsync(string documentId, CancellationToken ct)
         => Task.FromResult(Document);
 
-    public Task<string> ExportPdfAsync(string documentId, string? exportOption, CancellationToken ct)
+    public Task<string> ExportPdfAsync(string documentId, IReadOnlyList<string> exportOptions, CancellationToken ct)
     {
-        LastExportOption = exportOption;
+        LastExportOptions = exportOptions;
         if (ExportPdfThrows is not null) throw ExportPdfThrows;
         return Task.FromResult(PdfUrl);
     }

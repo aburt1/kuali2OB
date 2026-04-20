@@ -190,14 +190,14 @@ public sealed class ImportOrchestrator : IImportOrchestrator
             return await DownloadRawAttachmentsAsync(job, document, tempRoot, ct);
         }
 
-        var kualiOption = DownloadModes.ToKualiOption(mode);
+        var kualiOptions = DownloadModes.ToKualiOptions(mode);
 
         await _events.LogAsync(job.Id, JobEventKind.ExportRequested,
-            $"requesting Kuali export for {document.Id} (option={kualiOption})",
-            new { document.Id, Option = kualiOption },
+            $"requesting Kuali export for {document.Id} (options=[{string.Join(",", kualiOptions)}])",
+            new { document.Id, Options = kualiOptions },
             ct);
 
-        var url = await _kuali.ExportPdfAsync(document.Id, kualiOption, ct);
+        var url = await _kuali.ExportPdfAsync(document.Id, kualiOptions, ct);
 
         await _events.LogAsync(job.Id, JobEventKind.ExportCallbackReceived,
             "signed URL received",

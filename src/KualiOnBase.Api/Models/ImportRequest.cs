@@ -50,12 +50,15 @@ public static class DownloadModes
         }
     }
 
-    // Canonical value sent to Kuali in the `options: [String!]!` array.
-    public static string ToKualiOption(DownloadMode mode) => mode switch
+    // Values sent to Kuali in the `options: [String!]!` array. Kuali's array is
+    // *additive inclusion* — list what you want rendered into the output PDF.
+    // Combined = Form + Attachments merged into one file. (The `attachments`
+    // download mode doesn't go through this path; it downloads raw files.)
+    public static IReadOnlyList<string> ToKualiOptions(DownloadMode mode) => mode switch
     {
-        DownloadMode.Form => "Form",
-        DownloadMode.Combined => "Combined",
-        DownloadMode.Attachments => "Attachments",
+        DownloadMode.Form => new[] { "Form" },
+        DownloadMode.Combined => new[] { "Form", "Attachments" },
+        DownloadMode.Attachments => new[] { "Attachments" },
         _ => throw new ArgumentOutOfRangeException(nameof(mode)),
     };
 }

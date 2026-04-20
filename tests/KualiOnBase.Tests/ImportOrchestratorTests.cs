@@ -58,16 +58,20 @@ public class ImportOrchestratorTests : IDisposable
         text.Should().Contain("EXTERNAL_SOURCE_REF: 0014");
     }
 
-    [Theory]
-    [InlineData("form", "Form")]
-    [InlineData("combined", "Combined")]
-    public async Task Run_FormAndCombined_MapToKualiExportOption(string mode, string expectedOption)
+    [Fact]
+    public async Task Run_FormMode_SendsFormOnly()
     {
-        var job = BuildJob(mode);
+        await _sut.RunAsync(BuildJob("form"), CancellationToken.None);
+        _kuali.LastExportOptions.Should().Equal("Form");
+    }
 
-        await _sut.RunAsync(job, CancellationToken.None);
-
-        _kuali.LastExportOption.Should().Be(expectedOption);
+    [Fact]
+    public async Task Run_CombinedMode_SendsFormAndAttachments()
+    {
+        // Kuali's `options` array is additive — passing both includes both in
+        // one merged PDF. Sending just ["Combined"] did nothing on the tenant.
+        await _sut.RunAsync(BuildJob("combined"), CancellationToken.None);
+        _kuali.LastExportOptions.Should().Equal("Form", "Attachments");
     }
 
     [Fact]
@@ -90,7 +94,7 @@ public class ImportOrchestratorTests : IDisposable
 
         var result = await _sut.RunAsync(job, CancellationToken.None);
 
-        _kuali.LastExportOption.Should().BeNull("attachments mode must not call ExportPdfAsync");
+        _kuali.LastExportOptions.Should().BeNull("attachments mode must not call ExportPdfAsync");
 
         var contentFiles = Directory.EnumerateFiles(TargetFolder)
             .Where(p => !p.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
