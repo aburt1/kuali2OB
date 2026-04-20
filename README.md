@@ -199,6 +199,82 @@ tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
 
 ---
 
+## Design decisions & security rationale
+
+### Three distinct secrets, one per trust boundary
+
+| Secret | Trust boundary | Why separate |
+|---|---|---|
+| `Auth__ApiKey` | Kuali → this API | Authenticates inbound requests. Used only as the `X-Api-Key` header on `/api/*`. |
+| `Kuali__ApiToken` | This API → Kuali | Bearer token for Kuali's GraphQL. Different scope, rotated in Kuali's admin UI, should never equal the inbound key. |
+| `Kuali__CallbackSecret` | This API ↔ itself | HMAC-SHA256 key to sign callback URLs. See below. |
+
+Compromising one secret must not compromise the others. They live in separate env vars for exactly this reason.
+
+### HMAC-signed callback URL (not an API key)
+
+Kuali's `exportDocument` mutation is asynchronous — Kuali renders the PDF and POSTs the signed S3 URL back minutes later to a callback URL we supply. That callback endpoint has two constraints:
+
+1. It must be publicly reachable (Kuali's servers hit it from AWS us-west-2).
+2. It cannot require `X-Api-Key` — Kuali doesn't know our API key.
+
+Left unprotected, anyone on the internet who guesses a correlation id could POST a malicious URL and trick the API into downloading an attacker-controlled PDF into the OnBase drop folder — a document-spoofing attack against OnBase itself.
+
+**Fix:** every callback URL we hand to Kuali is signed: `?sig = HMAC-SHA256(correlationId, CallbackSecret)`. The callback endpoint recomputes the HMAC and rejects any request whose `sig` doesn't match. Only code that knows `CallbackSecret` can forge a valid signature. Kuali just echoes the URL back verbatim — it never sees or handles the secret.
+
+Why not just put `Auth__ApiKey` in the URL? A single static key in logs everywhere (Kuali side, proxy logs, browser history) works for every callback forever. HMAC binds each signature to one specific correlation id — a leaked URL is useless for forging a different callback.
+
+### Callback endpoint lives outside `/api/*` on purpose
+
+`ApiKeyMiddleware` only guards `/api/*`. The callback endpoint is at `/kuali-export-callback/{id}` so it bypasses the middleware entirely. The compensating control is the HMAC above. This is an explicit design choice: the middleware stays simple and doesn't need a carve-out for unauthenticated traffic.
+
+### Bare `HttpClient` for downloading signed S3 URLs
+
+When downloading from the AWS-signed URL Kuali returns, `KualiClient` uses `new HttpClient()` rather than the typed `IKualiClient` instance that carries the Bearer token. The signed URL already contains its own auth (AWS query-string signature); sending our Kuali `Authorization` header to an AWS endpoint would needlessly expose the token to a third party.
+
+### Synchronous happy path, asynchronous retry fallback
+
+The API responds `200 OK` only after the file lands in the OnBase folder. If transient failure strikes (Kuali 5xx after Polly retries, network glitch, filesystem flakiness) the job is marked `Retrying` and the API returns `202 Accepted`. The `RetryWorker` drains the queue with exponential backoff. This keeps Kuali's side simple — they don't have to poll us or handle webhooks — while still tolerating infrastructure hiccups.
+
+Non-transient failures (`400` from Kuali, invalid target path, validation errors) are marked `Failed` and return 4xx/500 immediately. No retry.
+
+### Two layers of retries, each for different failures
+
+- **Polly policy** on `HttpClient` — 3 attempts with exponential backoff **inside a single API call**, for transient HTTP errors against Kuali. Caller never sees the retry.
+- **RetryQueue + RetryWorker** — **across calls**, for any job that failed even after Polly gave up. Up to `MaxAttempts` with longer backoff. Survives a process restart.
+
+### SQLite + Dapper, not EF + Postgres
+
+One process, one file, one binary. No external dependencies, no ORM ceremony. Job history survives restarts, migrations are forward-only (embedded `*.sql` tracked in a tiny `__Migrations` table). If scale ever demands it, swapping to Postgres is a single connection-string change plus a Dapper dialect tweak — but YAGNI until then.
+
+### Event log per job, exposed to the dashboard
+
+Every stage (`DocumentFetched`, `ExportRequested`, `ExportCallbackReceived`, `PdfDownloaded`, `AttachmentDownloaded`, `FilesRenamed`, `BackupCreated`, `FilesCopiedToTarget`, `IndexFileWritten`, `AttachmentsCleared`, `DocumentDeleted`, `ImportSucceeded`/`ImportFailed`) records a row in `JobEvents` with the raw JSON payload — including the signed S3 URL Kuali returned, attachment metadata, byte counts, and the exact DIP index file content written to disk.
+
+This is the audit trail. It lets you confirm *after the fact* what Kuali actually sent and what landed in OnBase, which is the only way to debug discrepancies without re-running a job.
+
+Logging is wrapped in `try/catch` that swallows errors — **the event log must never break a job**.
+
+### Dated backup folders with retention purge
+
+Every successful import copies its files into `<BackupRootPath>/yyyyMMdd_HHmmss_<documentId>/` *before* they land in the OnBase drop folder. If OnBase rejects the upload or an admin needs to re-process manually, the exact bytes are recoverable.
+
+`BackupCleanupWorker` purges folders older than `Backup:RetentionDays` once per day, along with `ImportJobs` rows older than `Retry:SucceededJobRetentionDays`. This caps disk usage and DB size without a human in the loop.
+
+### Dashboard is off by default in the threat model
+
+`Ui__Enabled` is `true` by default for developer ergonomics, but production deployments that only want programmatic access should set it to `false`. Even with it enabled, the data API behind it (`/api/jobs`) is gated by `Auth__ApiKey` — serving the HTML is harmless, but the dashboard can't read job data without a valid key.
+
+### Filename sanitization
+
+OnBase DIP has strict filename rules. `FileNameSanitizer` strips `/ \ : * ? " < > |`, collapses whitespace, trims, and de-duplicates collisions by appending `_2`, `_3`, … A predictable sanitizer lets the DIP index file reference the exact on-disk name every time.
+
+### URL parameters over JSON body
+
+The `/api/kuali-onbase-import` endpoint takes all parameters as query-string, not a JSON body. This is because Kuali Build's HTTP Action works most reliably with GET-style query params — it avoids templating issues in their body editor and makes the call trivially replayable from curl or the dashboard.
+
+---
+
 ## Troubleshooting
 
 **Job stuck in `Retrying`** — check `lastError` on the job row. Common causes: `targetFolderPath` not writable, Kuali token expired, or the export callback never arrived (Kuali can't reach your public URL).
