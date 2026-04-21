@@ -39,5 +39,11 @@ services:
 
 volumes:
   kuali-onbase-data:
+    driver: local
+    name: kuali-onbase-data
   kuali-onbase-backup:
+    driver: local
+    name: kuali-onbase-backup
   kuali-onbase-target:
+    driver: local
+    name: kuali-onbase-target
