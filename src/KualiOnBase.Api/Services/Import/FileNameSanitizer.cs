@@ -7,6 +7,18 @@ public static class FileNameSanitizer
     private static readonly char[] Invalid =
         ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0', '\r', '\n', '\t'];
 
+    // Windows-reserved device names. If an OnBase drop is served from an SMB
+    // share to a Windows host, creating `CON.pdf` / `NUL.txt` fails with
+    // UnauthorizedAccessException. Prefix these so the filename is safe to
+    // create everywhere. Kuali documentIds are UUID-ish in practice so this
+    // almost never trips, but it's cheap insurance.
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
     public static string Sanitize(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -28,15 +40,13 @@ public static class FileNameSanitizer
         }
 
         var cleaned = sb.ToString().Trim(' ', '.', '-', '_');
-        return cleaned.Length == 0 ? "file" : cleaned;
+        if (cleaned.Length == 0) return "file";
+        if (ReservedNames.Contains(cleaned)) return "doc-" + cleaned;
+        return cleaned;
     }
 
-    // Filenames are the Kuali documentId, period. This keeps DIP-side lookup
-    // trivial (grep by id, no fuzzy match on sanitized names), survives any
-    // changes to Kuali's form-field shape (serial / school / name no longer
-    // baked into the filename), and the id is already URL-safe so sanitization
-    // is defensive-only. Multiple files from the same job get `_2`, `_3`, …
-    // suffixes via MakeUnique.
+    // Filenames are the Kuali documentId. Sanitization is defensive; the id is
+    // already URL-safe. Multi-file jobs get `_2`, `_3`, … via MakeUnique.
     public static string BuildContentFileName(string documentId, string extension)
     {
         var stem = Sanitize(documentId);

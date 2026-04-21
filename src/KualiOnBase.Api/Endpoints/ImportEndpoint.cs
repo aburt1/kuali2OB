@@ -4,6 +4,7 @@ using KualiOnBase.Api.Options;
 using KualiOnBase.Api.Services;
 using KualiOnBase.Api.Services.Import;
 using KualiOnBase.Api.Services.Kuali;
+using KualiOnBase.Api.Services.Notifications;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -29,18 +30,26 @@ public static class ImportEndpoint
         [FromQuery] bool? deleteDocument,
         RetryQueue queue,
         IImportOrchestrator orchestrator,
+        INotificationService notifications,
         IOptions<RetryOptions> retry,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var log = loggerFactory.CreateLogger("ImportEndpoint");
 
+        // Do NOT log request.QueryString here — it carries every KeywordKey/
+        // KeywordValue pair the caller sent, which in practice includes
+        // student IDs, full names, phone numbers, and anything else a Kuali
+        // workflow author wired in. We log the structured, non-PII subset
+        // only. Keyword count is safe (operator diagnostic), keyword values
+        // are not.
+        var keywordCount = CountKeywordPairs(request.Query);
         log.LogInformation(
             "Import request received: documentId={DocumentId} onbaseDocType={OnBaseDocType} " +
             "downloadMode={DownloadMode} deleteAttachments={DeleteAttachments} " +
-            "deleteDocument={DeleteDocument} targetFolderPath={TargetFolderPath} query={Query}",
+            "deleteDocument={DeleteDocument} targetFolderPath={TargetFolderPath} keywordCount={KeywordCount}",
             documentId, onbaseDocType, downloadMode, deleteAttachments,
-            deleteDocument, targetFolderPath, request.QueryString.Value);
+            deleteDocument, targetFolderPath, keywordCount);
 
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(documentId)) errors.Add("documentId is required.");
@@ -58,8 +67,8 @@ public static class ImportEndpoint
 
         if (errors.Count > 0)
         {
-            log.LogWarning("Import request rejected (validation): {Errors} | query={Query}",
-                string.Join(" | ", errors), request.QueryString.Value);
+            log.LogWarning("Import request rejected (validation): {Errors}",
+                string.Join(" | ", errors));
             return TextError(400, string.Join("\n", errors));
         }
 
@@ -112,12 +121,14 @@ public static class ImportEndpoint
         }
         catch (ArgumentException ex)
         {
+            // Caller-error (bad params) — no alert; operator already sees 400.
             await MarkFailedAsync(queue, job, ex, ct);
             log.LogWarning(ex, "Import job {JobId} rejected (bad argument)", job.Id);
             return TextError(400, ex.Message);
         }
         catch (DirectoryNotFoundException ex)
         {
+            // Also caller-configurable (wrong path) — no alert.
             await MarkFailedAsync(queue, job, ex, ct);
             log.LogWarning(ex, "Import job {JobId} rejected (target folder)", job.Id);
             return TextError(400, ex.Message);
@@ -126,6 +137,7 @@ public static class ImportEndpoint
         {
             await MarkFailedAsync(queue, job, ex, ct);
             log.LogError(ex, "Import job {JobId} failed permanently", job.Id);
+            await notifications.NotifyJobFailedAsync(job, ct);
             return TextError(500, $"Import failed: {ex.Message}");
         }
     }
@@ -160,6 +172,22 @@ public static class ImportEndpoint
         job.Status = JobStatus.Failed;
         job.LastError = ex.Message;
         await queue.UpdateAsync(job, ct);
+    }
+
+    // Count non-sentinel keyword pairs without exposing any value — used for
+    // observability (operator wants "was the keyword count right?") while
+    // staying PII-free in logs.
+    private static int CountKeywordPairs(IQueryCollection query)
+    {
+        var n = 0;
+        for (var i = 1; i <= 20; i++)
+        {
+            var key = query[$"KeywordKey{i}"].ToString();
+            var value = query[$"KeywordValue{i}"].ToString();
+            if (IsIgnoreSentinel(key) || IsIgnoreSentinel(value)) continue;
+            n++;
+        }
+        return n;
     }
 
     internal static List<KeyValuePair<string, string>> ExtractKeywords(IQueryCollection query)

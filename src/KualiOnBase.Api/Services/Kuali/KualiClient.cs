@@ -13,18 +13,33 @@ public sealed class KualiClient : IKualiClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    // Idle-chunk timeout for DownloadToFileAsync: if the source stalls for this
+    // long mid-body, we abort. Prevents a dead Kuali/S3 peer from pinning a
+    // socket and a worker task forever while the outer HttpClient timeout
+    // (which only covers headers under ResponseHeadersRead) doesn't fire.
+    private static readonly TimeSpan DownloadIdleTimeout = TimeSpan.FromMinutes(2);
+
+    // IHttpClientFactory name for the no-auth download client. Used when the
+    // signed URL is an external (S3/CDN) URL that carries its own auth — we
+    // must NOT forward the Kuali Bearer token to third parties, and we must
+    // go through the factory so sockets aren't leaked on `new HttpClient()`.
+    public const string DownloadHttpClientName = "KualiDownload";
+
     private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpFactory;
     private readonly KualiOptions _options;
     private readonly IExportCallbackStore _callbacks;
     private readonly ILogger<KualiClient> _log;
 
     public KualiClient(
         HttpClient http,
+        IHttpClientFactory httpFactory,
         IOptions<KualiOptions> options,
         IExportCallbackStore callbacks,
         ILogger<KualiClient> log)
     {
         _http = http;
+        _httpFactory = httpFactory;
         _options = options.Value;
         _callbacks = callbacks;
         _log = log;
@@ -136,20 +151,25 @@ public sealed class KualiClient : IKualiClient
         // Two URL shapes land here:
         //   1. Absolute external URLs (e.g. S3 signed URLs returned from exportDocument).
         //      These carry their own auth — we must NOT forward our Bearer token.
+        //      Pulled through IHttpClientFactory (NOT `new HttpClient()`) to avoid
+        //      socket exhaustion under load.
         //   2. Relative or same-host Kuali URLs (e.g. attachment permaLink / temporaryUrl).
         //      These live behind Kuali auth and need our Bearer token.
         var (requestUri, useAuth) = ResolveDownloadUrl(url);
 
+        HttpClient client;
+        bool disposeClient = false; // factory-owned clients are pooled; we don't dispose.
         HttpResponseMessage response;
         if (useAuth)
         {
+            client = _http;
             using var req = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            response = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         }
         else
         {
-            using var bareClient = new HttpClient();
-            response = await bareClient.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct);
+            client = _httpFactory.CreateClient(DownloadHttpClientName);
+            response = await client.GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, ct);
         }
 
         try
@@ -164,11 +184,39 @@ public sealed class KualiClient : IKualiClient
 
             await using var src = await response.Content.ReadAsStreamAsync(ct);
             await using var dst = File.Create(destinationPath);
-            await src.CopyToAsync(dst, ct);
+            await CopyWithIdleTimeoutAsync(src, dst, DownloadIdleTimeout, ct);
         }
         finally
         {
             response.Dispose();
+            if (disposeClient) client.Dispose();
+        }
+    }
+
+    // Streaming copy with a per-chunk idle timeout: if the source goes quiet
+    // mid-body for longer than `idle`, abort. HttpClient.Timeout under
+    // ResponseHeadersRead only covers the header phase, so without this guard
+    // a stalled-forever download would pin a worker task indefinitely.
+    private static async Task CopyWithIdleTimeoutAsync(
+        Stream src, Stream dst, TimeSpan idle, CancellationToken ct)
+    {
+        var buffer = new byte[81_920];
+        while (true)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(idle);
+            int read;
+            try
+            {
+                read = await src.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new IOException(
+                    $"Download stalled — no bytes received for {idle.TotalSeconds:0}s.");
+            }
+            if (read <= 0) return;
+            await dst.WriteAsync(buffer.AsMemory(0, read), ct);
         }
     }
 
@@ -212,18 +260,70 @@ public sealed class KualiClient : IKualiClient
             updates[path] = null;
         }
 
-        await ExecuteAsync(
-            KualiGraphQl.UpdateDocument,
-            new
-            {
-                args = new
+        try
+        {
+            await ExecuteAsync(
+                KualiGraphQl.UpdateDocument,
+                new
                 {
-                    id = documentId,
-                    data = updates,
-                    comment = "Attachments cleared by KualiOnBase integration after successful OnBase import.",
+                    args = new
+                    {
+                        id = documentId,
+                        data = updates,
+                        comment = "Attachments cleared by KualiOnBase integration after successful OnBase import.",
+                    },
                 },
-            },
-            ct);
+                ct);
+        }
+        catch (KualiApiException ex) when (ex.IsRequiredFieldValidation)
+        {
+            // Kuali rejects null-ing out a required attachment field unless the form
+            // has "Ignore required field validation on save" enabled. Surface a
+            // pointed hint so operators don't have to puzzle over a generic error.
+            throw new KualiApiException(
+                $"Kuali rejected clearing attachment fields on document {documentId}: {ex.Message}. " +
+                "Enable \"Ignore required field validation on save\" on the Kuali form (Form → Settings) " +
+                "so the deleteAttachments step can null out required attachment fields.",
+                ex);
+        }
+    }
+
+    // Tightened detection (H7): previously we substring-matched "required" / "validation",
+    // which would false-positive on any error message mentioning those words (e.g. "token
+    // has expired, re-authentication required"). Now we look at Kuali's structured error
+    // shape: GraphQL errors carry `extensions.code` — we check for that specifically,
+    // and only fall back to a very narrow message-substring pattern for tenants whose
+    // error payload doesn't surface extensions.
+    internal static bool IsRequiredFieldValidationError(JsonArray? errors)
+    {
+        if (errors is null) return false;
+        foreach (var err in errors)
+        {
+            if (err is not JsonObject obj) continue;
+
+            // Preferred: structured error code from Kuali.
+            var code = obj["extensions"]?["code"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(code))
+            {
+                if (string.Equals(code, "FIELD_VALIDATION_FAILED", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(code, "REQUIRED_FIELD_MISSING", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(code, "VALIDATION_ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            // Fallback: a narrow phrase-match that requires BOTH "required" AND "field"
+            // (so generic uses of either word in auth/network errors don't match).
+            var msg = obj["message"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(msg)
+                && msg.Contains("required", StringComparison.OrdinalIgnoreCase)
+                && msg.Contains("field", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     public async Task DeleteDocumentAsync(string documentId, CancellationToken ct)
@@ -249,9 +349,13 @@ public sealed class KualiClient : IKualiClient
         var errors = payload["errors"]?.AsArray();
         if (errors is { Count: > 0 })
         {
+            var isRequired = IsRequiredFieldValidationError(errors);
             var message = string.Join("; ",
                 errors.Select(e => e?["message"]?.GetValue<string>() ?? "unknown error"));
-            throw new KualiApiException($"Kuali GraphQL errors: {message}");
+            throw new KualiApiException($"Kuali GraphQL errors: {message}")
+            {
+                IsRequiredFieldValidation = isRequired,
+            };
         }
 
         return payload["data"]?.AsObject()
@@ -342,4 +446,10 @@ public sealed class KualiApiException : Exception
 {
     public KualiApiException(string message) : base(message) { }
     public KualiApiException(string message, Exception inner) : base(message, inner) { }
+
+    // Set by ExecuteAsync when the GraphQL error batch includes a structured
+    // "required field validation" code (or a narrow phrase fallback). Used by
+    // ClearAttachmentsAsync to attach the "Ignore required field validation
+    // on save" operator hint without substring-matching arbitrary text.
+    public bool IsRequiredFieldValidation { get; init; }
 }

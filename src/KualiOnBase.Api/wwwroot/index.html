@@ -486,10 +486,10 @@
   <!-- API key dialog -->
   <dialog id="key-dialog" class="modal" aria-labelledby="key-title">
     <h2 id="key-title">Enter API key</h2>
-    <p>Stored locally in your browser. Sent as <code>X-Api-Key</code> on every request.</p>
+    <p>Stored locally in your browser. Sent as <code>Authorization: Bearer &lt;key&gt;</code> on every request.</p>
     <form method="dialog" id="key-form">
       <div class="field">
-        <label for="api-key">X-Api-Key</label>
+        <label for="api-key">API key</label>
         <input id="api-key" type="password" autocomplete="off" spellcheck="false" required />
       </div>
       <div class="actions">
@@ -660,7 +660,7 @@
     try {
       const res = await fetch("/api/kuali-onbase-import?" + params.toString(), {
         method: "POST",
-        headers: { "X-Api-Key": getKey() },
+        headers: { "Authorization": "Bearer " + getKey() },
       });
       const body = await res.text();
       $("#import-result").textContent = `${res.status} ${res.statusText} — ${body}`;
@@ -783,11 +783,12 @@
   }
 
   function renderDetail(j) {
+    // Server returns basenames only (see JobsEndpoint) — no absolute paths
+    // are exposed to the dashboard; downloads are looked up by index.
     const filesList = j.files.length
       ? `<ul>${j.files.map((f, i) => {
-          const name = escapeHtml(f.split(/[\\/]/).pop());
-          const pathEsc = escapeHtml(f);
-          return `<li><a href="#" class="file-link" data-job="${j.id}" data-idx="${i}" data-name="${name}" title="${pathEsc}">${name}</a> <button class="copy" data-copy="${pathEsc}">copy path</button></li>`;
+          const name = escapeHtml(f);
+          return `<li><a href="#" class="file-link" data-job="${j.id}" data-idx="${i}" data-name="${name}">${name}</a></li>`;
         }).join("")}</ul>`
       : `<span style="color:var(--muted)">No files produced yet.</span>`;
     const kws = j.keywords && j.keywords.length
@@ -811,7 +812,7 @@
             <dt>Keywords</dt><dd>${kws}</dd>
             <dt>Delete attachments</dt><dd>${j.deleteAttachments ? "yes" : "no"}</dd>
             <dt>Delete document</dt><dd>${j.deleteDocument ? "yes" : "no"}</dd>
-            <dt>Backup folder</dt><dd>${j.backupFolderPath ? escapeHtml(j.backupFolderPath) + ` <button class="copy" data-copy="${escapeHtml(j.backupFolderPath)}">copy</button>` : '<span style="color:var(--muted)">—</span>'}</dd>
+            <dt>Backup folder</dt><dd>${j.backupFolderName ? escapeHtml(j.backupFolderName) + ` <span style="color:var(--muted)">(inside Backup:RootPath)</span>` : (j.hasBackup ? '<span style="color:var(--muted)">(opaque)</span>' : '<span style="color:var(--muted)">—</span>')}</dd>
             <dt>Files produced</dt><dd>${filesList}</dd>
             ${attemptLine}
             ${j.lastError ? `<dt>Last error</dt><dd class="error">${escapeHtml(j.lastError)}</dd>` : ""}
@@ -848,7 +849,7 @@
     }
     try {
       const res = await fetch("/api/jobs?limit=100", {
-        headers: { "X-Api-Key": key },
+        headers: { "Authorization": "Bearer " + key },
       });
       if (res.status === 401) {
         renderError("API key rejected (401). Open API key to update it.");
@@ -893,7 +894,7 @@
   async function openJobFile(jobId, index, name) {
     try {
       const res = await fetch(`/api/jobs/${jobId}/files/${index}`, {
-        headers: { "X-Api-Key": getKey() },
+        headers: { "Authorization": "Bearer " + getKey() },
       });
       if (!res.ok) {
         alert(`Couldn't load file (${res.status}). It may have been moved or deleted.`);

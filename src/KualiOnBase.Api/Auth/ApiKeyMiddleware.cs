@@ -5,7 +5,6 @@ namespace KualiOnBase.Api.Auth;
 
 public sealed class ApiKeyMiddleware
 {
-    public const string HeaderName = "X-Api-Key";
     public const string BearerPrefix = "Bearer ";
 
     private readonly RequestDelegate _next;
@@ -32,36 +31,34 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        var provided = ExtractToken(context.Request);
+        var provided = ExtractBearerToken(context.Request);
         if (provided is null || !CryptographicEquals(provided, _expected))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(
-                "Missing or invalid credentials. Send the API key as either 'X-Api-Key: <key>' or 'Authorization: Bearer <key>'.");
+                "Missing or invalid credentials. Send the API key as 'Authorization: Bearer <key>'.");
             return;
         }
 
         await _next(context);
     }
 
-    private static string? ExtractToken(HttpRequest request)
+    // Bearer-only. We intentionally do not accept X-Api-Key — one auth path
+    // means one piece of code to audit, and rate-limit partitioning downstream
+    // can't disagree with middleware about which header is authoritative.
+    internal static string? ExtractBearerToken(HttpRequest request)
     {
-        if (request.Headers.TryGetValue(HeaderName, out var apiKeyHeader))
+        if (!request.Headers.TryGetValue("Authorization", out var auth))
         {
-            var v = apiKeyHeader.ToString();
-            if (!string.IsNullOrEmpty(v)) return v;
+            return null;
         }
-
-        if (request.Headers.TryGetValue("Authorization", out var auth))
+        var v = auth.ToString();
+        if (!v.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            var v = auth.ToString();
-            if (v.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return v.Substring(BearerPrefix.Length).Trim();
-            }
+            return null;
         }
-
-        return null;
+        var token = v.Substring(BearerPrefix.Length).Trim();
+        return string.IsNullOrEmpty(token) ? null : token;
     }
 
     private static bool CryptographicEquals(string a, string b)

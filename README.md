@@ -21,7 +21,7 @@ dotnet run --project src/KualiOnBase.Api
 
 Open <http://localhost:5050>, enter your API key, and the Auditor page will list every job as it runs — Kuali Build POSTs to `/api/kuali-onbase-import`, the jobs appear here with a per-event timeline. You can also replay any past job with edited params from its row.
 
-To fire a one-off against a real Kuali document, POST to `/api/kuali-onbase-import` directly (see the curl example below). To run tests: `dotnet test`.
+To fire a one-off against a real Kuali document, POST to `/api/kuali-onbase-import` directly (see the curl example below).
 
 > Note: running locally, Kuali cannot reach your machine for the PDF export callback. For a real end-to-end test, deploy behind a public URL (see Deployment) or use a tunnel (`ngrok http 5050`) and set `Kuali:PublicBaseUrl` to the public URL.
 
@@ -43,12 +43,10 @@ POST https://<your-host>/api/kuali-onbase-import
      &KeywordValue2=900123456
 
 Headers:
-  X-Api-Key: <your-auth-apikey>
-  # or equivalently:
   Authorization: Bearer <your-auth-apikey>
 ```
 
-The API accepts the key in either header — whichever your HTTP client makes easier. Kuali Build's "Bearer authentication" option works out of the box; the dashboard and curl examples use `X-Api-Key`.
+Authentication is bearer-only. Kuali Build's built-in **"Bearer authentication"** option on the HTTP Action step wires straight through — paste the key into Kuali's bearer-token field and leave the custom-headers section alone. Every example below uses the same `Authorization: Bearer …` form; no `X-Api-Key` path exists.
 
 ### Parameters
 
@@ -58,7 +56,7 @@ The API accepts the key in either header — whichever your HTTP client makes ea
 | `onbaseDocType` | yes | string | Value for the `ONBASE_DOC_TYPE` index line |
 | `targetFolderPath` | yes | string | UNC or mapped path; must exist and be writable by the API process |
 | `downloadMode` | yes | `pdf` \| `attachments` | `pdf` = one PDF from Kuali's `exportDocument` (tenant setting decides whether attachments are merged in — see **Kuali tenant prerequisite** below). `attachments` = raw attachment files in their original formats (.docx/.jpg/.pdf/…). |
-| `deleteAttachments` | yes | bool | If true, clears attachment fields on the Kuali document after a successful copy |
+| `deleteAttachments` | yes | bool | If true, clears attachment fields on the Kuali document after a successful copy. **Requires** the Kuali form setting "Ignore required field validation on save" — see below. |
 | `deleteDocument` | no | bool (default false) | If true, deletes the Kuali document after a successful copy |
 | `KeywordKey1..20` / `KeywordValue1..20` | no | string pairs | Extra `KEY: VALUE` lines in the DIP index; incomplete pairs are ignored |
 
@@ -69,7 +67,8 @@ The API accepts the key in either header — whichever your HTTP client makes ea
 | `200 OK` | Import completed | `{ jobId, status: "Succeeded", files: [...], backupFolder }` |
 | `202 Accepted` | Transient failure — queued for retry | `{ jobId, status: "Retrying", attempt, nextAttemptAt }` |
 | `400 Bad Request` | Validation error | error message |
-| `401 Unauthorized` | Missing/bad `X-Api-Key` | |
+| `401 Unauthorized` | Missing/bad `Authorization: Bearer` header | |
+| `429 Too Many Requests` | Per-key rate limit exceeded (60/min on `POST /api/kuali-onbase-import`) | |
 | `500 Internal Server Error` | Unrecoverable error | error message |
 
 ### Example — curl
@@ -84,7 +83,7 @@ documentId=68fa2b19c0f15c00281b3e42\
 &deleteDocument=false\
 &KeywordKey1=Department\
 &KeywordValue1=ITS" \
-  -H "X-Api-Key: $AUTH_APIKEY"
+  -H "Authorization: Bearer $AUTH_APIKEY"
 ```
 
 Spaces and backslashes must be URL-encoded (`%20`, `%5C`).
@@ -111,18 +110,32 @@ Toggle location: Kuali Build admin → Settings → Documents → "Include PDFs 
 
 If you need attachment-inclusive output without relying on the tenant setting — or if attachments aren't always PDFs — use `downloadMode=attachments`. That path downloads each file from Kuali directly, preserves original formats, and produces one index-file entry per content file.
 
+---
+
+## Kuali form prerequisite — "Ignore required field validation on save"
+
+Required only when `deleteAttachments=true`.
+
+The clean-up step calls Kuali's `updateDocument` mutation to null out each attachment field on the document. If any of those fields are marked **required** on the Kuali form (the usual case), Kuali rejects the update with a validation error — you'll see something like `ValidationError: field is required` in the job's `lastError`.
+
+**Fix:** in the Kuali form editor, open **Form → Settings** and enable **"Ignore required field validation on save"**. That flag tells Kuali to allow server-side writes (including ours) to leave required fields empty. End-user form submissions are unaffected — that path runs a separate validation layer.
+
+Without this flag, the import still delivers the file to OnBase and takes the backup — only the post-import `deleteAttachments` step fails. The API surfaces the error with a hint pointing to this setting.
+
+Leave the flag off if you don't use `deleteAttachments` or if your attachment fields aren't required.
+
 ### Diagnostic probe
 
 When a new tenant behaves differently, probe it empirically without running a full import:
 
 ```bash
 curl -X POST "https://<host>/api/diag/kuali-probe-export" \
-  -H "X-Api-Key: $AUTH_APIKEY" \
+  -H "Authorization: Bearer $AUTH_APIKEY" \
   -H "Content-Type: application/json" \
   -d '{"documentId":"<some-doc-id>","options":["Combined"]}'
 ```
 
-Returns `{ sizeBytes, sha256, durationMs, signedUrl }`. Sweep different `options` arrays and compare sizes — same size = no effect, larger size = something was merged in. Also available: `GET /api/diag/db-status` for persistence checks.
+Returns `{ documentId, sentOptions, sizeBytes, sha256, durationMs }`. Sweep different `options` arrays and compare sizes — same size = no effect, larger size = something was merged in. (The probe intentionally does **not** return the signed URL — those are for server-internal use only.) Also available: `GET /api/diag/db-status` for persistence checks. The probe endpoint shares the same per-bearer rate limit as `/api/kuali-onbase-import` (60 req/minute) and size-caps the downloaded body at 200 MB to stop scripted abuse from exhausting container memory or blowing through your Kuali export quota.
 
 ---
 
@@ -134,7 +147,7 @@ In the Kuali Build form/workflow editor, add an **HTTP Action** step to the appr
 |---|---|
 | Method | `POST` |
 | URL | `https://your-host/api/kuali-onbase-import?documentId={{document.id}}&onbaseDocType=IT - Access&targetFolderPath=\\onbase-prod\DIP\incoming&downloadMode=pdf&deleteAttachments=true&deleteDocument=false&KeywordKey1=Department&KeywordValue1={{data.department}}` |
-| Headers | `X-Api-Key: <your-auth-apikey>` |
+| Authentication | **Bearer authentication** — paste `<your-auth-apikey>` into Kuali's bearer-token field. |
 
 `{{document.id}}` is Kuali's template token — it gets substituted at runtime. Form-field values follow the same `{{data.<fieldName>}}` pattern. Static params (doc type, target folder, mode) are hardcoded per workflow.
 
@@ -169,7 +182,17 @@ All settings bind from either `appsettings.json` or environment variables. **In 
 | `Retry__BaseDelaySeconds` | `Retry:BaseDelaySeconds` | `60` | Exponential backoff base |
 | `Retry__PollIntervalSeconds` | `Retry:PollIntervalSeconds` | `30` | Retry worker loop interval |
 | `Database__Path` | `Database:Path` | `./data/kuali-onbase.db` | SQLite file path |
+| `Import__AllowedTargetRoots` | `Import:AllowedTargetRoots` | *empty — rejects every request* | Semicolon-separated list of absolute path prefixes that `targetFolderPath` is allowed to land under. Fail-secure: without at least one root configured the API refuses to start. Example: `/mnt/onbase-drop;\\\\onbase-prod\\DIP`. Prevents Kuali workflow authors from writing to arbitrary locations (another tenant's share, `/etc`, a container root mount, etc.). |
 | `Ui__Enabled` | `Ui:Enabled` | `true` | Serve the dashboard at `/`. Set to `false` to hide it in production if you only want API access. |
+| `Notifications__Email__Enabled` | `Notifications:Email:Enabled` | `false` | Send an email when a job hits terminal `Failed`. |
+| `Notifications__Email__SmtpHost` | `Notifications:Email:SmtpHost` | *empty* | SMTP relay hostname |
+| `Notifications__Email__SmtpPort` | `Notifications:Email:SmtpPort` | `25` | |
+| `Notifications__Email__SmtpUsername` / `SmtpPassword` | same | *empty* | Optional SMTP auth |
+| `Notifications__Email__UseSsl` | `Notifications:Email:UseSsl` | `false` | |
+| `Notifications__Email__From` | `Notifications:Email:From` | *empty* | Envelope sender (required when Enabled) |
+| `Notifications__Email__To` | `Notifications:Email:To` | *empty* | Comma-separated recipients (required when Enabled) |
+
+**Boot-time validation.** The API refuses to start if any of `Auth:ApiKey`, `Kuali:BaseUrl`, `Kuali:ApiToken`, `Kuali:PublicBaseUrl`, `Kuali:CallbackSecret`, `Backup:RootPath`, or `Import:AllowedTargetRoots` is missing or still set to a known placeholder (`CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, …). Secrets shorter than 16 characters are also rejected. URLs must be valid `http(s)://` absolute URLs, and every `Import:AllowedTargetRoots` entry must be an absolute path. Catches the most common deploy mistakes (env vars not injected, weak placeholder left in, a single typoed path) at deploy time instead of on the first real request.
 
 ---
 
@@ -202,6 +225,25 @@ On Coolify:
 
 ---
 
+## Operations
+
+**Health checks.** Point Coolify (or any orchestrator) at these:
+
+| Endpoint | Purpose | Codes |
+|---|---|---|
+| `GET /health` | Liveness — is the process up? | `200 {status:"ok"}` |
+| `GET /health/ready` | Readiness — can the app actually serve work? Opens the DB and writes a probe file to `Backup:RootPath`. | `200 {status:"ready"}` or `503 {status:"not_ready", problems:[...]}` |
+
+Neither requires an API key.
+
+**Rate limit.** `POST /api/kuali-onbase-import` is capped at **60 requests per minute per API key** (fixed window, partitioned by the bearer token). Over-limit requests get `429 Too Many Requests`. Well above any real Kuali workflow cadence; only trips on accidental loops (stuck workflow, dashboard-replay spam). Auth runs before the limiter, so unauthenticated requests can't spray unique tokens to exhaust the partition dictionary.
+
+**Failure email.** When a job reaches terminal `Failed` (either immediately or after exhausting `Retry:MaxAttempts`), the API sends an email to `Notifications:Email:To` listing the job id, document id, attempts, and last error. Configure the `Notifications__Email__*` env vars above. Send failures are logged but never bubble up — a broken SMTP relay won't obscure the underlying job failure. 4xx-class failures (validation, missing target folder) don't trigger notifications — those are caller-fixable and the HTTP response already carries the detail.
+
+**SQLite VACUUM.** `BackupCleanupWorker` runs daily, prunes succeeded jobs older than `Retry:SucceededJobRetentionDays`, and only then runs `VACUUM` to reclaim disk. Keeps the DB file compact without rewriting it on days nothing was pruned.
+
+---
+
 ## Auditor / Visualizer (dashboard)
 
 Open the root URL (default `/`). On first visit, click **API key** and paste your `Auth__ApiKey`. The page is read-first — it shows what the API actually did against Kuali for every job Kuali Build fires at it:
@@ -231,7 +273,6 @@ src/KualiOnBase.Api/
     RetryQueue.cs          Dapper CRUD over ImportJobs
     JobEventLog.cs         Per-job event log with payloads
   wwwroot/index.html       Auditor / Visualizer page (vanilla HTML/CSS/JS)
-tests/KualiOnBase.Tests/   xUnit + FluentAssertions, WebApplicationFactory
 tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
 ```
 
@@ -243,7 +284,7 @@ tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
 
 | Secret | Trust boundary | Why separate |
 |---|---|---|
-| `Auth__ApiKey` | Kuali → this API | Authenticates inbound requests. Used only as the `X-Api-Key` header on `/api/*`. |
+| `Auth__ApiKey` | Kuali → this API | Authenticates inbound requests. Sent as `Authorization: Bearer <key>` on `/api/*`. |
 | `Kuali__ApiToken` | This API → Kuali | Bearer token for Kuali's GraphQL. Different scope, rotated in Kuali's admin UI, should never equal the inbound key. |
 | `Kuali__CallbackSecret` | This API ↔ itself | HMAC-SHA256 key to sign callback URLs. See below. |
 
@@ -254,7 +295,7 @@ Compromising one secret must not compromise the others. They live in separate en
 Kuali's `exportDocument` mutation is asynchronous — Kuali renders the PDF and POSTs the signed S3 URL back minutes later to a callback URL we supply. That callback endpoint has two constraints:
 
 1. It must be publicly reachable (Kuali's servers hit it from AWS us-west-2).
-2. It cannot require `X-Api-Key` — Kuali doesn't know our API key.
+2. It cannot require `Authorization: Bearer <key>` — Kuali doesn't know our API key.
 
 Left unprotected, anyone on the internet who guesses a correlation id could POST a malicious URL and trick the API into downloading an attacker-controlled PDF into the OnBase drop folder — a document-spoofing attack against OnBase itself.
 
@@ -319,11 +360,13 @@ The `/api/kuali-onbase-import` endpoint takes all parameters as query-string, no
 
 **401 from Kuali in the event log** — rotate `Kuali__ApiToken`.
 
-**401 from your own API in the dashboard** — the `X-Api-Key` the browser stored no longer matches `Auth__ApiKey`. Click **API key** and re-enter it.
+**401 from your own API in the dashboard** — the bearer token the browser stored no longer matches `Auth__ApiKey`. Click **API key** and re-enter it.
 
 **Callback never arrives** — confirm `Kuali__PublicBaseUrl` is actually reachable from Kuali's network (they're in AWS us-west-2). Coolify + a public hostname works; localhost does not.
 
 **`downloadMode=pdf` is only returning the form render — attachments are missing** — the Kuali tenant setting "Include PDFs uploaded through the form" is off. See [Kuali tenant prerequisite](#kuali-tenant-prerequisite--include-pdfs-uploaded-through-the-form) above. Either turn the setting on (simplest), or switch the workflow to `downloadMode=attachments` for raw attachment files.
+
+**`deleteAttachments=true` job fails with "required" / "validation" in `lastError`** — the Kuali form doesn't have "Ignore required field validation on save" enabled. See [Kuali form prerequisite](#kuali-form-prerequisite--ignore-required-field-validation-on-save) above. The file was still delivered to OnBase and backed up; only the clean-up call failed.
 
 **Dashboard shows the wrong files** — check the event log for the job. The `FilesRenamed` event shows staged → final mapping; `IndexFileWritten` shows the exact text written to disk.
 

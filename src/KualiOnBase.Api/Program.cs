@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using KualiOnBase.Api.Auth;
 using KualiOnBase.Api.BackgroundServices;
 using KualiOnBase.Api.Data;
@@ -6,6 +7,9 @@ using KualiOnBase.Api.Options;
 using KualiOnBase.Api.Services;
 using KualiOnBase.Api.Services.Import;
 using KualiOnBase.Api.Services.Kuali;
+using KualiOnBase.Api.Services.Notifications;
+using KualiOnBase.Api.Startup;
+using Microsoft.AspNetCore.RateLimiting;
 using Polly;
 using Polly.Extensions.Http;
 using Serilog;
@@ -23,6 +27,8 @@ builder.Services.Configure<BackupOptions>(builder.Configuration.GetSection(Backu
 builder.Services.Configure<RetryOptions>(builder.Configuration.GetSection(RetryOptions.SectionName));
 builder.Services.Configure<DatabaseOptions>(builder.Configuration.GetSection(DatabaseOptions.SectionName));
 builder.Services.Configure<UiOptions>(builder.Configuration.GetSection(UiOptions.SectionName));
+builder.Services.Configure<NotificationsOptions>(builder.Configuration.GetSection(NotificationsOptions.SectionName));
+builder.Services.Configure<ImportOptions>(builder.Configuration.GetSection(ImportOptions.SectionName));
 
 builder.Services.AddSingleton<Db>();
 builder.Services.AddScoped<RetryQueue>();
@@ -30,17 +36,70 @@ builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IImportOrchestrator, ImportOrchestrator>();
 builder.Services.AddScoped<IExportCallbackStore, ExportCallbackStore>();
 builder.Services.AddScoped<IJobEventLog, JobEventLog>();
+builder.Services.AddSingleton<INotificationService, EmailNotificationService>();
 
-builder.Services.AddHttpClient<IKualiClient, KualiClient>()
+// Explicit Timeout on the named HttpClient: covers SendAsync (connect + headers)
+// for GraphQL calls AND the ResponseHeadersRead phase of DownloadToFileAsync.
+// Large bodies stream after headers so this doesn't cap download size; it DOES
+// stop a stuck-handshake or dead-peer scenario from pinning a worker thread
+// and hogging a socket forever. 60s is generous — Kuali's own GraphQL is
+// typically sub-second, but export callback polling / export-start mutation
+// can occasionally sit at the edge.
+builder.Services.AddHttpClient<IKualiClient, KualiClient>(c =>
+    {
+        c.Timeout = TimeSpan.FromSeconds(60);
+    })
     .AddPolicyHandler(GetKualiRetryPolicy());
+
+// Separate named client for Kuali signed-URL downloads — it must NOT carry
+// the Bearer header (S3/CDN URLs are self-authenticating), and it must have
+// a generous per-request timeout because PDF exports can be large. Pulled
+// through IHttpClientFactory to prevent socket exhaustion from `new HttpClient()`.
+builder.Services.AddHttpClient(KualiClient.DownloadHttpClientName, c =>
+{
+    // Covers handshake + headers; the body stream copy is gated by a
+    // per-chunk idle timeout inside KualiClient.DownloadToFileAsync.
+    c.Timeout = TimeSpan.FromMinutes(5);
+});
 
 builder.Services.AddHostedService<RetryWorker>();
 builder.Services.AddHostedService<BackupCleanupWorker>();
+
+// Partition rate limit by API key so one runaway caller can't starve the rest.
+// 60 req/minute is well above any real Kuali workflow cadence and catches
+// accidental loops (dashboard replay spam, workflow misconfigured to call us
+// in a retry loop, etc.) before they become a DoS on ourselves.
+//
+// Note: app.UseRateLimiter() is wired AFTER ApiKeyMiddleware below, so by the
+// time we partition here we've already rejected unauthenticated traffic.
+// That means the partition key is always the (authenticated) bearer token —
+// we use the same extractor the middleware does, so there is exactly one
+// answer to "which token is this call from".
+const string ImportRateLimiterPolicy = "import";
+builder.Services.AddRateLimiter(opt =>
+{
+    opt.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    opt.AddPolicy(ImportRateLimiterPolicy, httpCtx =>
+    {
+        var token = ApiKeyMiddleware.ExtractBearerToken(httpCtx.Request);
+        var partition = token ?? (httpCtx.Connection.RemoteIpAddress?.ToString() ?? "anon");
+        return RateLimitPartition.GetFixedWindowLimiter(partition, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        });
+    });
+});
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+StartupValidator.ValidateOrThrow(
+    app.Services,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup"));
 
 app.Services.GetRequiredService<Db>().Migrate(
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Db"));
@@ -83,14 +142,25 @@ if (uiEnabled)
     app.UseStaticFiles();
 }
 
+// Auth BEFORE rate-limit on purpose: the rate limiter partitions by bearer
+// token, and without auth gating first an attacker can spray millions of
+// unique Authorization values and explode the partition dictionary (DoS on
+// memory). UseMiddleware<ApiKeyMiddleware> only guards /api/*, so static
+// files / health / callback endpoints are unaffected.
 app.UseMiddleware<ApiKeyMiddleware>();
+app.UseRateLimiter();
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-ImportEndpoint.Map(app);
+HealthEndpoint.Map(app);
+ImportEndpoint.Map(app).RequireRateLimiting(ImportRateLimiterPolicy);
 JobsEndpoint.Map(app);
 JobFilesEndpoint.Map(app);
 KualiExportCallbackEndpoint.Map(app);
-DiagnosticEndpoint.Map(app);
+// db-status is cheap and read-only; no rate-limit needed.
+// kuali-probe-export actually calls Kuali + writes to temp disk — partition it
+// with the same bucket as /api/kuali-onbase-import so an operator can't script
+// the probe endpoint to hammer their Kuali export quota.
+DiagnosticEndpoint.MapDbStatus(app);
+DiagnosticEndpoint.MapProbeExport(app).RequireRateLimiting(ImportRateLimiterPolicy);
 
 static IAsyncPolicy<HttpResponseMessage> GetKualiRetryPolicy()
 {
@@ -100,5 +170,3 @@ static IAsyncPolicy<HttpResponseMessage> GetKualiRetryPolicy()
 }
 
 app.Run();
-
-public partial class Program { }

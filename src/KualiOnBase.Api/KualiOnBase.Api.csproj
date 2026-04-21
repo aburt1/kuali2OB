@@ -21,8 +21,4 @@
     <EmbeddedResource Include="Data/Migrations/*.sql" />
   </ItemGroup>
 
-  <ItemGroup>
-    <InternalsVisibleTo Include="KualiOnBase.Tests" />
-  </ItemGroup>
-
 </Project>

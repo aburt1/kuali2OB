@@ -1,7 +1,9 @@
 using System.Text.Json;
 using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Options;
 using KualiOnBase.Api.Services;
 using KualiOnBase.Api.Services.Kuali;
+using Microsoft.Extensions.Options;
 
 namespace KualiOnBase.Api.Services.Import;
 
@@ -10,17 +12,20 @@ public sealed class ImportOrchestrator : IImportOrchestrator
     private readonly IKualiClient _kuali;
     private readonly IBackupService _backup;
     private readonly IJobEventLog _events;
+    private readonly ImportOptions _importOptions;
     private readonly ILogger<ImportOrchestrator> _log;
 
     public ImportOrchestrator(
         IKualiClient kuali,
         IBackupService backup,
         IJobEventLog events,
+        IOptions<ImportOptions> importOptions,
         ILogger<ImportOrchestrator> log)
     {
         _kuali = kuali;
         _backup = backup;
         _events = events;
+        _importOptions = importOptions.Value;
         _log = log;
     }
 
@@ -32,10 +37,49 @@ public sealed class ImportOrchestrator : IImportOrchestrator
                 $"Invalid downloadMode '{job.DownloadMode}'. Expected pdf|attachments.");
         }
 
+        // Path allow-list check BEFORE existence/write-probe. A malicious caller
+        // can otherwise point at any path the container user can write (/etc,
+        // /, another tenant's share mounted sibling to ours). We normalize with
+        // GetFullPath to collapse ../ and trailing slash differences, then check
+        // that the resulting path sits under one of the operator-declared roots.
+        ValidateTargetPath(job.TargetFolderPath);
+
         if (!Directory.Exists(job.TargetFolderPath))
         {
             throw new DirectoryNotFoundException(
                 $"targetFolderPath '{job.TargetFolderPath}' does not exist or is not reachable.");
+        }
+
+        // Directory.Exists passes on read-only mounts and on folders the container
+        // user can't write to. A create+delete probe catches permission problems
+        // *before* we've burned a Kuali export call and downloaded 100 MB of PDFs.
+        var probePath = Path.Combine(job.TargetFolderPath, $".kuali2ob-probe-{Guid.NewGuid():N}");
+        var probeWrote = false;
+        try
+        {
+            await File.WriteAllTextAsync(probePath, "probe", ct);
+            probeWrote = true;
+            File.Delete(probePath);
+            probeWrote = false;
+        }
+        catch (OperationCanceledException)
+        {
+            // Let cancellation propagate — but clean the probe first in the
+            // finally so we don't leave orphaned .kuali2ob-probe-* files in
+            // every OnBase drop folder we've ever served.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new UnauthorizedAccessException(
+                $"targetFolderPath '{job.TargetFolderPath}' is not writable by this process: {ex.Message}", ex);
+        }
+        finally
+        {
+            if (probeWrote)
+            {
+                try { File.Delete(probePath); } catch { /* best effort; ok if AV already removed it */ }
+            }
         }
 
         await _events.LogAsync(job.Id, JobEventKind.ImportStarted,
@@ -182,15 +226,9 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         string tempRoot,
         CancellationToken ct)
     {
-        // `attachments` downloads raw files so mixed-format uploads (.docx, .jpg, …)
-        // survive intact. `pdf` goes through Kuali's exportDocument, which always
-        // returns a single PDF. Whether that PDF contains just the form render or
-        // form + merged attachments is controlled entirely by the Kuali tenant
-        // setting "Include PDFs uploaded through the form" — we send the
-        // documented canonical option string and Kuali decides what's in it.
-        // Empirical note: Kuali ignores the `options` array contents on tenants
-        // where the setting is off; sending `["Combined"]` is the canonical
-        // value per Kuali's developer docs and keeps the GraphQL call honest.
+        // `attachments` downloads raw files (preserves .docx/.jpg/…).
+        // `pdf` uses Kuali's exportDocument; merge behavior is controlled by the
+        // Kuali tenant setting "Include PDFs uploaded through the form" (see README).
         if (mode == DownloadMode.Attachments)
         {
             return await DownloadRawAttachmentsAsync(job, document, tempRoot, ct);
@@ -288,6 +326,59 @@ public sealed class ImportOrchestrator : IImportOrchestrator
     {
         try { Directory.Delete(path, recursive: true); }
         catch { /* best effort */ }
+    }
+
+    private void ValidateTargetPath(string requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            throw new ArgumentException("targetFolderPath is required.", nameof(requested));
+        }
+
+        var roots = _importOptions.ParseAllowedRoots();
+        if (roots.Count == 0)
+        {
+            // StartupValidator should have caught this, but guard at runtime
+            // in case someone bypassed validation (tests, hot reload).
+            throw new InvalidOperationException(
+                "Import:AllowedTargetRoots is not configured; refusing to write to any targetFolderPath.");
+        }
+
+        string canonical;
+        try
+        {
+            canonical = Path.GetFullPath(requested);
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException(
+                $"targetFolderPath '{requested}' is not a valid path: {ex.Message}", nameof(requested), ex);
+        }
+
+        // OS-appropriate comparison: case-insensitive on Windows / SMB,
+        // case-sensitive elsewhere. OnBase drops are typically on SMB shares
+        // which are case-insensitive, so we err on that side.
+        var cmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        foreach (var root in roots)
+        {
+            // Normalize both sides with a trailing separator so `/allowed` does
+            // NOT accept `/allowed-sibling`.
+            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            var normalizedPath = canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            if (normalizedPath.StartsWith(normalizedRoot, cmp))
+            {
+                return;
+            }
+        }
+
+        throw new ArgumentException(
+            $"targetFolderPath '{requested}' is not under any configured Import:AllowedTargetRoots.",
+            nameof(requested));
     }
 
     private sealed record KeywordDto(string Key, string Value);

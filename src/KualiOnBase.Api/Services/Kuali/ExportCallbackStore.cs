@@ -7,8 +7,13 @@ public interface IExportCallbackStore
 {
     Task CreatePendingAsync(string correlationId, string documentId, CancellationToken ct);
     Task<ExportCallbackRow?> GetAsync(string correlationId, CancellationToken ct);
-    Task MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct);
-    Task MarkFailedAsync(string correlationId, string error, CancellationToken ct);
+
+    // Returns true iff the row transitioned from Pending to Completed. False means
+    // the row was already Completed/Failed — the caller lost the race (legitimate
+    // duplicate) or is an attacker trying to overwrite a finalized state.
+    Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct);
+    Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct);
+
     Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct);
 }
 
@@ -55,30 +60,36 @@ public sealed class ExportCallbackStore : IExportCallbackStore
             cancellationToken: ct));
     }
 
-    public async Task MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct)
+    public async Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct)
     {
         using var conn = _db.Open();
-        await conn.ExecuteAsync(new CommandDefinition(
+        // WHERE Status='Pending' is the one-shot guard. If an attacker races to
+        // re-POST the callback after we (or they) already finalized it, affected==0
+        // and we surface a 409 to the caller without touching the row. Without this
+        // guard, any authenticated-by-HMAC caller can overwrite SignedUrl at will.
+        var affected = await conn.ExecuteAsync(new CommandDefinition(
             """
             UPDATE ExportCallbacks
                SET Status = 'Completed', SignedUrl = @Url, UpdatedAt = @Now
-             WHERE CorrelationId = @Id;
+             WHERE CorrelationId = @Id AND Status = 'Pending';
             """,
             new { Id = correlationId, Url = signedUrl, Now = DateTime.UtcNow },
             cancellationToken: ct));
+        return affected == 1;
     }
 
-    public async Task MarkFailedAsync(string correlationId, string error, CancellationToken ct)
+    public async Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct)
     {
         using var conn = _db.Open();
-        await conn.ExecuteAsync(new CommandDefinition(
+        var affected = await conn.ExecuteAsync(new CommandDefinition(
             """
             UPDATE ExportCallbacks
                SET Status = 'Failed', ErrorMessage = @Error, UpdatedAt = @Now
-             WHERE CorrelationId = @Id;
+             WHERE CorrelationId = @Id AND Status = 'Pending';
             """,
             new { Id = correlationId, Error = error, Now = DateTime.UtcNow },
             cancellationToken: ct));
+        return affected == 1;
     }
 
     public async Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct)

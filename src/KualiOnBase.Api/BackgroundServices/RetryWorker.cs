@@ -3,6 +3,7 @@ using KualiOnBase.Api.Models;
 using KualiOnBase.Api.Options;
 using KualiOnBase.Api.Services;
 using KualiOnBase.Api.Services.Import;
+using KualiOnBase.Api.Services.Notifications;
 using Microsoft.Extensions.Options;
 
 namespace KualiOnBase.Api.BackgroundServices;
@@ -57,12 +58,13 @@ public sealed class RetryWorker : BackgroundService
         using var scope = _scopes.CreateScope();
         var queue = scope.ServiceProvider.GetRequiredService<RetryQueue>();
         var orchestrator = scope.ServiceProvider.GetRequiredService<IImportOrchestrator>();
+        var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
         var due = await queue.DueForRetryAsync(DateTime.UtcNow, ct);
         foreach (var job in due)
         {
             if (ct.IsCancellationRequested) break;
-            await RunJobAsync(job, queue, orchestrator, ct);
+            await RunJobAsync(job, queue, orchestrator, notifications, ct);
         }
     }
 
@@ -70,6 +72,7 @@ public sealed class RetryWorker : BackgroundService
         ImportJob job,
         RetryQueue queue,
         IImportOrchestrator orchestrator,
+        INotificationService notifications,
         CancellationToken ct)
     {
         job.AttemptCount += 1;
@@ -90,7 +93,8 @@ public sealed class RetryWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            if (job.AttemptCount >= _options.MaxAttempts)
+            var exhausted = job.AttemptCount >= _options.MaxAttempts;
+            if (exhausted)
             {
                 job.Status = JobStatus.Failed;
                 job.LastError = ex.Message;
@@ -109,6 +113,11 @@ public sealed class RetryWorker : BackgroundService
                     job.Id, job.AttemptCount, job.NextAttemptAt);
             }
             await queue.UpdateAsync(job, ct);
+
+            if (exhausted)
+            {
+                await notifications.NotifyJobFailedAsync(job, ct);
+            }
         }
     }
 
