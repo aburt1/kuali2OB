@@ -16,8 +16,11 @@ services:
   api:
     build: .
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    # `expose` (not `ports`) — Coolify's built-in proxy routes to the container
+    # on the internal Docker network. Binding a host port conflicts with the
+    # proxy and breaks redeploys when the old container still holds 8080.
+    expose:
+      - "8080"
     volumes:
       - kuali-onbase-data:/data
       - kuali-onbase-backup:/backup
