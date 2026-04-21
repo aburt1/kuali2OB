@@ -29,7 +29,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         if (!DownloadModes.TryParse(job.DownloadMode, out var mode))
         {
             throw new ArgumentException(
-                $"Invalid downloadMode '{job.DownloadMode}'. Expected form|combined|attachments.");
+                $"Invalid downloadMode '{job.DownloadMode}'. Expected pdf|attachments.");
         }
 
         if (!Directory.Exists(job.TargetFolderPath))
@@ -182,15 +182,20 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         CancellationToken ct)
     {
         // `attachments` downloads raw files so mixed-format uploads (.docx, .jpg, …)
-        // survive intact. `form` and `combined` go through Kuali's exportDocument,
-        // which always returns a single merged PDF — `combined` requires every
-        // attachment to be a PDF (Kuali limitation; propagated as a Kuali error).
+        // survive intact. `pdf` goes through Kuali's exportDocument, which always
+        // returns a single PDF. Whether that PDF contains just the form render or
+        // form + merged attachments is controlled entirely by the Kuali tenant
+        // setting "Include PDFs uploaded through the form" — we send the
+        // documented canonical option string and Kuali decides what's in it.
+        // Empirical note: Kuali ignores the `options` array contents on tenants
+        // where the setting is off; sending `["Combined"]` is the canonical
+        // value per Kuali's developer docs and keeps the GraphQL call honest.
         if (mode == DownloadMode.Attachments)
         {
             return await DownloadRawAttachmentsAsync(job, document, tempRoot, ct);
         }
 
-        var kualiOptions = DownloadModes.ToKualiOptions(mode);
+        var kualiOptions = new[] { "Combined" };
 
         await _events.LogAsync(job.Id, JobEventKind.ExportRequested,
             $"requesting Kuali export for {document.Id} (options=[{string.Join(",", kualiOptions)}])",

@@ -517,8 +517,7 @@
         <div class="field">
           <label for="f-downloadMode">downloadMode</label>
           <select id="f-downloadMode">
-            <option value="form">form — just the form render</option>
-            <option value="combined">combined — form + attachments merged (attachments must be PDFs)</option>
+            <option value="pdf">pdf — one PDF from Kuali (tenant setting controls whether attachments are merged in)</option>
             <option value="attachments">attachments — raw attachment files, original formats preserved</option>
           </select>
         </div>
@@ -624,7 +623,7 @@
       $("#f-documentId").value = prefill.documentId ?? "";
       $("#f-onbaseDocType").value = prefill.onbaseDocType ?? "";
       $("#f-targetFolderPath").value = prefill.targetFolderPath ?? "";
-      $("#f-downloadMode").value = prefill.downloadMode ?? "form";
+      $("#f-downloadMode").value = prefill.downloadMode ?? "pdf";
       $("#f-deleteAttachments").value = prefill.deleteAttachments ? "true" : "false";
       $("#f-deleteDocument").value = prefill.deleteDocument ? "true" : "false";
       renderKeywordFields(prefill.keywords || []);

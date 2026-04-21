@@ -34,7 +34,7 @@ POST https://<your-host>/api/kuali-onbase-import
      ?documentId=68fa2b19c0f15c00281b3e42
      &onbaseDocType=IT - Access
      &targetFolderPath=\\onbase-prod\DIP\incoming
-     &downloadMode=all
+     &downloadMode=pdf
      &deleteAttachments=true
      &deleteDocument=false
      &KeywordKey1=Department
@@ -57,7 +57,7 @@ The API accepts the key in either header — whichever your HTTP client makes ea
 | `documentId` | yes | string | Kuali Build document id |
 | `onbaseDocType` | yes | string | Value for the `ONBASE_DOC_TYPE` index line |
 | `targetFolderPath` | yes | string | UNC or mapped path; must exist and be writable by the API process |
-| `downloadMode` | yes | `pdf` \| `attachments` \| `all` | Which files to pull |
+| `downloadMode` | yes | `pdf` \| `attachments` | `pdf` = one PDF from Kuali's `exportDocument` (tenant setting decides whether attachments are merged in — see **Kuali tenant prerequisite** below). `attachments` = raw attachment files in their original formats (.docx/.jpg/.pdf/…). |
 | `deleteAttachments` | yes | bool | If true, clears attachment fields on the Kuali document after a successful copy |
 | `deleteDocument` | no | bool (default false) | If true, deletes the Kuali document after a successful copy |
 | `KeywordKey1..20` / `KeywordValue1..20` | no | string pairs | Extra `KEY: VALUE` lines in the DIP index; incomplete pairs are ignored |
@@ -79,7 +79,7 @@ curl -X POST "https://your-host/api/kuali-onbase-import?\
 documentId=68fa2b19c0f15c00281b3e42\
 &onbaseDocType=IT%20-%20Access\
 &targetFolderPath=%5C%5Conbase-prod%5CDIP%5Cincoming\
-&downloadMode=all\
+&downloadMode=pdf\
 &deleteAttachments=true\
 &deleteDocument=false\
 &KeywordKey1=Department\
@@ -91,6 +91,41 @@ Spaces and backslashes must be URL-encoded (`%20`, `%5C`).
 
 ---
 
+## Kuali tenant prerequisite — "Include PDFs uploaded through the form"
+
+`downloadMode=pdf` calls Kuali's `exportDocument` mutation and writes whatever single PDF Kuali returns. What's *in* that PDF is decided by **one tenant-level toggle in Kuali's admin UI**, not by anything this API sends.
+
+| Tenant setting | What `downloadMode=pdf` produces |
+|---|---|
+| **"Include PDFs uploaded through the form" = ON** | Form render + every PDF attachment merged into a single PDF file |
+| **"Include PDFs uploaded through the form" = OFF** | Form render only — attachments are **not merged**, regardless of what option strings we send |
+
+This was verified empirically against the CSUB tenant: with the setting off, sending `["Form"]`, `["Combined"]`, `["Attachments"]`, `["Form","Attachments"]`, `["Merged"]`, `["All"]`, `[]`, and `["FormAndAttachments"]` all returned the form-only render (identical byte size, ~35 KB on a document with a 158 KB PDF attachment that should have been included if merging were happening). Kuali's `options: [String!]!` array has no documented-and-working effect here — the tenant setting is the real switch. The API sends the canonical `["Combined"]` option so the GraphQL call stays consistent with Kuali's docs, but the behavior comes from the tenant configuration.
+
+**Caveats even with the setting on:**
+
+- Kuali can only merge **PDF attachments**. Non-PDF uploads (.docx, .jpg, .xlsx) on the source document will cause Kuali's export to fail or drop them. If a document mixes PDF and non-PDF attachments, use `downloadMode=attachments` instead — it downloads each raw file and lets OnBase index them all.
+- If the toggle ever gets flipped back off by a Kuali admin, workflows that rely on the merged output will silently degrade to form-only. **Use the dashboard's event timeline (or `GET /api/jobs/{id}`) to watch `PdfDownloaded → bytes` — a sudden drop vs. historical jobs is the signal.**
+
+Toggle location: Kuali Build admin → Settings → Documents → "Include PDFs uploaded through the form".
+
+If you need attachment-inclusive output without relying on the tenant setting — or if attachments aren't always PDFs — use `downloadMode=attachments`. That path downloads each file from Kuali directly, preserves original formats, and produces one index-file entry per content file.
+
+### Diagnostic probe
+
+When a new tenant behaves differently, probe it empirically without running a full import:
+
+```bash
+curl -X POST "https://<host>/api/diag/kuali-probe-export" \
+  -H "X-Api-Key: $AUTH_APIKEY" \
+  -H "Content-Type: application/json" \
+  -d '{"documentId":"<some-doc-id>","options":["Combined"]}'
+```
+
+Returns `{ sizeBytes, sha256, durationMs, signedUrl }`. Sweep different `options` arrays and compare sizes — same size = no effect, larger size = something was merged in. Also available: `GET /api/diag/db-status` for persistence checks.
+
+---
+
 ## Wiring to Kuali Build
 
 In the Kuali Build form/workflow editor, add an **HTTP Action** step to the approval flow:
@@ -98,7 +133,7 @@ In the Kuali Build form/workflow editor, add an **HTTP Action** step to the appr
 | Field | Value |
 |---|---|
 | Method | `POST` |
-| URL | `https://your-host/api/kuali-onbase-import?documentId={{document.id}}&onbaseDocType=IT - Access&targetFolderPath=\\onbase-prod\DIP\incoming&downloadMode=all&deleteAttachments=true&deleteDocument=false&KeywordKey1=Department&KeywordValue1={{data.department}}` |
+| URL | `https://your-host/api/kuali-onbase-import?documentId={{document.id}}&onbaseDocType=IT - Access&targetFolderPath=\\onbase-prod\DIP\incoming&downloadMode=pdf&deleteAttachments=true&deleteDocument=false&KeywordKey1=Department&KeywordValue1={{data.department}}` |
 | Headers | `X-Api-Key: <your-auth-apikey>` |
 
 `{{document.id}}` is Kuali's template token — it gets substituted at runtime. Form-field values follow the same `{{data.<fieldName>}}` pattern. Static params (doc type, target folder, mode) are hardcoded per workflow.
@@ -288,6 +323,8 @@ The `/api/kuali-onbase-import` endpoint takes all parameters as query-string, no
 **401 from your own API in the dashboard** — the `X-Api-Key` the browser stored no longer matches `Auth__ApiKey`. Click **API key** and re-enter it.
 
 **Callback never arrives** — confirm `Kuali__PublicBaseUrl` is actually reachable from Kuali's network (they're in AWS us-west-2). Coolify + a public hostname works; localhost does not.
+
+**`downloadMode=pdf` is only returning the form render — attachments are missing** — the Kuali tenant setting "Include PDFs uploaded through the form" is off. See [Kuali tenant prerequisite](#kuali-tenant-prerequisite--include-pdfs-uploaded-through-the-form) above. Either turn the setting on (simplest), or switch the workflow to `downloadMode=attachments` for raw attachment files.
 
 **Dashboard shows the wrong files** — check the event log for the job. The `FilesRenamed` event shows staged → final mapping; `IndexFileWritten` shows the exact text written to disk.
 

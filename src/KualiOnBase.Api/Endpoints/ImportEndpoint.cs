@@ -52,7 +52,7 @@ public static class ImportEndpoint
         }
         else if (!DownloadModes.TryParse(downloadMode, out _))
         {
-            errors.Add("downloadMode must be one of: form, combined, attachments.");
+            errors.Add("downloadMode must be one of: pdf, attachments.");
         }
         if (deleteAttachments is null) errors.Add("deleteAttachments is required.");
 

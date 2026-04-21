@@ -24,16 +24,19 @@ public sealed record ImportRequest
     public bool DeleteDocument { get; init; }
 }
 
-// form        → Kuali exportDocument(Form) → 1 PDF (form render only)
-// combined    → Kuali exportDocument(Combined) → 1 PDF (form + attachments merged).
-//               NOTE: Kuali can only merge PDF attachments. Non-PDF uploads on the
-//               source document will make this mode fail — use `attachments` instead.
-// attachments → raw attachment files downloaded directly, preserving original
-//               formats (.docx/.jpg/.xlsx/…). N files out (one per attachment).
+// Two shapes, chosen by the caller:
+//
+// pdf         → one PDF file via Kuali's exportDocument mutation. What's actually
+//               *in* that PDF (form only, or form + PDF attachments merged) is
+//               determined entirely by the Kuali tenant setting
+//               "Include PDFs uploaded through the form" — not by us. See
+//               README → "Kuali tenant prerequisite".
+// attachments → raw attachment files downloaded directly from Kuali, preserving
+//               original formats (.docx/.jpg/.xlsx/…). N files out, one per
+//               attachment. Bypasses exportDocument entirely.
 public enum DownloadMode
 {
-    Form,
-    Combined,
+    Pdf,
     Attachments,
 }
 
@@ -43,22 +46,9 @@ public static class DownloadModes
     {
         switch (value?.Trim().ToLowerInvariant())
         {
-            case "form": mode = DownloadMode.Form; return true;
-            case "combined": mode = DownloadMode.Combined; return true;
+            case "pdf": mode = DownloadMode.Pdf; return true;
             case "attachments": mode = DownloadMode.Attachments; return true;
             default: mode = default; return false;
         }
     }
-
-    // Values sent to Kuali in the `options: [String!]!` array. Kuali's array is
-    // *additive inclusion* — list what you want rendered into the output PDF.
-    // Combined = Form + Attachments merged into one file. (The `attachments`
-    // download mode doesn't go through this path; it downloads raw files.)
-    public static IReadOnlyList<string> ToKualiOptions(DownloadMode mode) => mode switch
-    {
-        DownloadMode.Form => new[] { "Form" },
-        DownloadMode.Combined => new[] { "Form", "Attachments" },
-        DownloadMode.Attachments => new[] { "Attachments" },
-        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-    };
 }

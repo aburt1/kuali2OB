@@ -38,9 +38,9 @@ public class ImportOrchestratorTests : IDisposable
     private string BackupRoot => Path.Combine(_sandbox, "backup");
 
     [Fact]
-    public async Task Run_FormMode_WritesPdfAndIndex()
+    public async Task Run_PdfMode_WritesPdfAndIndex()
     {
-        var job = BuildJob("form");
+        var job = BuildJob("pdf");
 
         var result = await _sut.RunAsync(job, CancellationToken.None);
 
@@ -59,19 +59,13 @@ public class ImportOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_FormMode_SendsFormOnly()
+    public async Task Run_PdfMode_SendsCanonicalCombinedOption()
     {
-        await _sut.RunAsync(BuildJob("form"), CancellationToken.None);
-        _kuali.LastExportOptions.Should().Equal("Form");
-    }
-
-    [Fact]
-    public async Task Run_CombinedMode_SendsFormAndAttachments()
-    {
-        // Kuali's `options` array is additive — passing both includes both in
-        // one merged PDF. Sending just ["Combined"] did nothing on the tenant.
-        await _sut.RunAsync(BuildJob("combined"), CancellationToken.None);
-        _kuali.LastExportOptions.Should().Equal("Form", "Attachments");
+        // Canonical Kuali option per their developer docs. Actual merge behavior
+        // is controlled by the tenant setting "Include PDFs uploaded through
+        // the form", not by the option array (see README → tenant prerequisite).
+        await _sut.RunAsync(BuildJob("pdf"), CancellationToken.None);
+        _kuali.LastExportOptions.Should().Equal("Combined");
     }
 
     [Fact]
@@ -124,7 +118,7 @@ public class ImportOrchestratorTests : IDisposable
             Attachments = [new KualiAttachment("a", "data.uploads", "x.pdf", "https://fake/a")],
         };
 
-        var job = BuildJob("combined", deleteAttachments: true);
+        var job = BuildJob("pdf", deleteAttachments: true);
 
         await _sut.RunAsync(job, CancellationToken.None);
 
@@ -136,7 +130,7 @@ public class ImportOrchestratorTests : IDisposable
     [Fact]
     public async Task Run_DeleteDocumentFlag_CallsDeleteDocument()
     {
-        var job = BuildJob("form", deleteDocument: true);
+        var job = BuildJob("pdf", deleteDocument: true);
         await _sut.RunAsync(job, CancellationToken.None);
         _kuali.DocumentDeleted.Should().BeTrue();
     }
@@ -144,7 +138,7 @@ public class ImportOrchestratorTests : IDisposable
     [Fact]
     public async Task Run_TargetFolderMissing_Throws()
     {
-        var job = BuildJob("form");
+        var job = BuildJob("pdf");
         job.TargetFolderPath = Path.Combine(_sandbox, "does-not-exist");
 
         var act = () => _sut.RunAsync(job, CancellationToken.None);
@@ -155,7 +149,7 @@ public class ImportOrchestratorTests : IDisposable
     public async Task Run_TransientKualiFailure_Propagates()
     {
         _kuali.ExportPdfThrows = new HttpRequestException("boom");
-        var job = BuildJob("form");
+        var job = BuildJob("pdf");
 
         var act = () => _sut.RunAsync(job, CancellationToken.None);
         await act.Should().ThrowAsync<HttpRequestException>();
@@ -164,7 +158,7 @@ public class ImportOrchestratorTests : IDisposable
     [Fact]
     public async Task Run_WritesKeywordsFromJobIntoIndex()
     {
-        var job = BuildJob("form");
+        var job = BuildJob("pdf");
         job.KeywordsJson = JsonSerializer.Serialize(new[]
         {
             new { Key = "Department", Value = "ITS" },
