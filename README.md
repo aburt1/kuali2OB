@@ -19,9 +19,9 @@ cd kuali2OB
 dotnet run --project src/KualiOnBase.Api
 ```
 
-Open <http://localhost:5050>, enter your API key, click **Fire test import**. The dashboard will show job progress with a timeline of every event.
+Open <http://localhost:5050>, enter your API key, and the Auditor page will list every job as it runs — Kuali Build POSTs to `/api/kuali-onbase-import`, the jobs appear here with a per-event timeline. You can also replay any past job with edited params from its row.
 
-To run tests: `dotnet test`.
+To fire a one-off against a real Kuali document, POST to `/api/kuali-onbase-import` directly (see the curl example below). To run tests: `dotnet test`.
 
 > Note: running locally, Kuali cannot reach your machine for the PDF export callback. For a real end-to-end test, deploy behind a public URL (see Deployment) or use a tunnel (`ngrok http 5050`) and set `Kuali:PublicBaseUrl` to the public URL.
 
@@ -202,17 +202,16 @@ On Coolify:
 
 ---
 
-## Dashboard
+## Auditor / Visualizer (dashboard)
 
-Open the root URL (default `/`). On first visit, click **API key** and paste your `Auth__ApiKey`. The dashboard:
+Open the root URL (default `/`). On first visit, click **API key** and paste your `Auth__ApiKey`. The page is read-first — it shows what the API actually did against Kuali for every job Kuali Build fires at it:
 
 - Lists the most recent 100 jobs (polls every 3s)
 - Click a row to expand: left pane = metadata, right pane = **event timeline** showing every stage (Kuali fetch, signed URL, downloads, rename, copy, index write, success/fail)
 - Each event has a `payload` toggle that reveals the exact JSON — including the signed PDF URL Kuali returned, attachment metadata, file byte counts, and the full DIP index file content
+- **Replay with changes** — every job row exposes a button that re-opens its parameters in a dialog; edit anything (target folder, keywords, delete flags, download mode) and re-submit. Useful for reissuing a failed job after fixing its inputs, or for testing a param change against the same document without touching Kuali Build's workflow config.
 
-Useful once deployed for verifying what Kuali actually sends against real documents.
-
-To disable the dashboard entirely in production: `Ui__Enabled=false`.
+To disable the page entirely in production: `Ui__Enabled=false`.
 
 ---
 
@@ -231,7 +230,7 @@ src/KualiOnBase.Api/
     Import/                ImportOrchestrator, BackupService, FileNameSanitizer, IndexFileBuilder
     RetryQueue.cs          Dapper CRUD over ImportJobs
     JobEventLog.cs         Per-job event log with payloads
-  wwwroot/index.html       Dashboard (vanilla HTML/CSS/JS)
+  wwwroot/index.html       Auditor / Visualizer page (vanilla HTML/CSS/JS)
 tests/KualiOnBase.Tests/   xUnit + FluentAssertions, WebApplicationFactory
 tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
 ```

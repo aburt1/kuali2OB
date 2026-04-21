@@ -55,7 +55,12 @@ public class ImportOrchestratorTests : IDisposable
         var text = await File.ReadAllTextAsync(indexFile);
         text.Should().Contain("ONBASE_DOC_TYPE: IT - Access");
         text.Should().Contain("EXTERNAL_SOURCE: KUALI BUILD");
-        text.Should().Contain("EXTERNAL_SOURCE_REF: 0014");
+        text.Should().Contain("EXTERNAL_SOURCE_REF: doc-1");
+
+        // Filenames derive from the Kuali documentId, not serial/school/name.
+        var pdfFile = Directory.EnumerateFiles(TargetFolder, "*.pdf").Single();
+        Path.GetFileName(pdfFile).Should().Be("doc-1.pdf");
+        Path.GetFileName(indexFile).Should().Be("doc-1.txt");
     }
 
     [Fact]

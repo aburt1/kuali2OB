@@ -24,38 +24,35 @@ public class FileNameSanitizerTests
     }
 
     [Fact]
-    public void BuildContentFileName_JoinsSegmentsWithUnderscores()
+    public void BuildContentFileName_UsesDocumentIdAsStem()
     {
         var name = FileNameSanitizer.BuildContentFileName(
-            serialNumber: "0014",
-            schoolId: "001933711",
-            lastName: "Ferguson",
-            firstName: "Jason",
-            onbaseDocType: "IT - PeopleSoft Access Request Form",
+            documentId: "69e79b2017521d02859ccdfa",
             extension: "pdf");
 
-        name.Should().Be("0014_001933711_Ferguson_Jason_IT - PeopleSoft Access Request Form.pdf");
+        name.Should().Be("69e79b2017521d02859ccdfa.pdf");
     }
 
     [Fact]
-    public void BuildContentFileName_SanitizesEachSegmentAndExtension()
+    public void BuildContentFileName_NormalizesExtensionCaseAndLeadingDot()
     {
-        var name = FileNameSanitizer.BuildContentFileName(
-            serialNumber: "0014",
-            schoolId: "001/933",
-            lastName: "O:Malley",
-            firstName: "Jay*",
-            onbaseDocType: "IT/Access Request",
-            extension: ".PDF");
-
-        name.Should().Be("0014_001-933_O-Malley_Jay_IT-Access Request.pdf");
+        FileNameSanitizer.BuildContentFileName("doc-abc", ".PDF").Should().Be("doc-abc.pdf");
+        FileNameSanitizer.BuildContentFileName("doc-abc", "DOCX").Should().Be("doc-abc.docx");
     }
 
     [Fact]
-    public void BuildContentFileName_SkipsEmptySegments()
+    public void BuildContentFileName_SanitizesDocumentIdDefensively()
     {
-        var name = FileNameSanitizer.BuildContentFileName("0014", "", "Doe", "", "DocType", "pdf");
-        name.Should().Be("0014_Doe_DocType.pdf");
+        // Kuali ids are hex today, but sanitize defensively so a surprise char
+        // in a future id scheme can't produce an invalid Windows path.
+        FileNameSanitizer.BuildContentFileName("abc/def:ghi", "pdf")
+            .Should().Be("abc-def-ghi.pdf");
+    }
+
+    [Fact]
+    public void BuildContentFileName_NoExtension_ReturnsStemOnly()
+    {
+        FileNameSanitizer.BuildContentFileName("abc123", "").Should().Be("abc123");
     }
 
     [Fact]

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Kuali → OnBase Simulator</title>
+<title>Kuali → OnBase Auditor</title>
 <style>
   :root {
     --bg: #0c0f14;
@@ -455,12 +455,11 @@
 </head>
 <body>
   <header>
-    <h1>Kuali → OnBase <span class="sub">Simulator</span></h1>
+    <h1>Kuali → OnBase <span class="sub">Auditor / Visualizer</span></h1>
     <div class="toolbar">
       <div class="summary" id="summary" aria-live="polite"></div>
       <span id="key-state" class="key-state missing">No API key set</span>
       <button class="ghost" id="set-key">API key</button>
-      <button class="primary" id="open-import">Fire test import</button>
     </div>
   </header>
 
@@ -500,10 +499,10 @@
     </form>
   </dialog>
 
-  <!-- Import form dialog -->
+  <!-- Replay dialog — opened from a job row's "Replay with changes" button. -->
   <dialog id="import-dialog" class="modal" aria-labelledby="import-title">
-    <h2 id="import-title">Fire test import</h2>
-    <p>Submits a POST to <code>/api/kuali-onbase-import</code>. Requires a real document id in your Kuali tenant.</p>
+    <h2 id="import-title">Replay import</h2>
+    <p>Re-submits a POST to <code>/api/kuali-onbase-import</code> with these parameters. Useful for reissuing a failed job after fixing its inputs, or for testing param changes against the same document.</p>
     <form id="import-form">
       <div class="field">
         <label for="f-documentId">documentId</label>
@@ -612,31 +611,27 @@
     $("#keyword-grid").innerHTML = rows.join("");
   }
 
-  function openImportDialog(prefill) {
+  // The dialog is replay-only — the entry point is the per-row "Replay with
+  // changes" button. `prefill` comes from the job the user clicked.
+  function openReplayDialog(prefill) {
     if (!getKey()) {
       keyDialog.showModal();
       return;
     }
     $("#import-result").textContent = "";
 
-    if (prefill) {
-      $("#f-documentId").value = prefill.documentId ?? "";
-      $("#f-onbaseDocType").value = prefill.onbaseDocType ?? "";
-      $("#f-targetFolderPath").value = prefill.targetFolderPath ?? "";
-      $("#f-downloadMode").value = prefill.downloadMode ?? "pdf";
-      $("#f-deleteAttachments").value = prefill.deleteAttachments ? "true" : "false";
-      $("#f-deleteDocument").value = prefill.deleteDocument ? "true" : "false";
-      renderKeywordFields(prefill.keywords || []);
-      $("#import-title").textContent = `Replay import #${prefill.id}`;
-    } else {
-      renderKeywordFields();
-      $("#import-title").textContent = "Fire test import";
-    }
+    $("#f-documentId").value = prefill.documentId ?? "";
+    $("#f-onbaseDocType").value = prefill.onbaseDocType ?? "";
+    $("#f-targetFolderPath").value = prefill.targetFolderPath ?? "";
+    $("#f-downloadMode").value = prefill.downloadMode ?? "pdf";
+    $("#f-deleteAttachments").value = prefill.deleteAttachments ? "true" : "false";
+    $("#f-deleteDocument").value = prefill.deleteDocument ? "true" : "false";
+    renderKeywordFields(prefill.keywords || []);
+    $("#import-title").textContent = `Replay import #${prefill.id}`;
 
     importDialog.showModal();
   }
 
-  $("#open-import").addEventListener("click", () => openImportDialog(null));
   $("#import-cancel").addEventListener("click", () => importDialog.close());
 
   $("#import-form").addEventListener("submit", async (e) => {
@@ -834,7 +829,7 @@
     rowsEl.innerHTML = `
       <div class="empty">
         <strong>No imports yet.</strong>
-        Fire a test import, or POST to <code>/api/kuali-onbase-import</code>.
+        Kuali Build POSTs jobs to <code>/api/kuali-onbase-import</code>; they'll show up here as they run.
       </div>
     `;
   }
@@ -925,7 +920,7 @@
     if (replay) {
       e.stopPropagation();
       const j = findJobById(replay.dataset.replay);
-      if (j) openImportDialog(j);
+      if (j) openReplayDialog(j);
       return;
     }
     const fileLink = e.target.closest(".file-link");

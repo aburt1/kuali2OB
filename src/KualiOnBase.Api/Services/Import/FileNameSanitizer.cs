@@ -31,24 +31,15 @@ public static class FileNameSanitizer
         return cleaned.Length == 0 ? "file" : cleaned;
     }
 
-    public static string BuildContentFileName(
-        string serialNumber,
-        string schoolId,
-        string lastName,
-        string firstName,
-        string onbaseDocType,
-        string extension)
+    // Filenames are the Kuali documentId, period. This keeps DIP-side lookup
+    // trivial (grep by id, no fuzzy match on sanitized names), survives any
+    // changes to Kuali's form-field shape (serial / school / name no longer
+    // baked into the filename), and the id is already URL-safe so sanitization
+    // is defensive-only. Multiple files from the same job get `_2`, `_3`, …
+    // suffixes via MakeUnique.
+    public static string BuildContentFileName(string documentId, string extension)
     {
-        var parts = new[]
-        {
-            Sanitize(serialNumber),
-            Sanitize(schoolId),
-            Sanitize(lastName),
-            Sanitize(firstName),
-            Sanitize(onbaseDocType),
-        }.Where(p => p.Length > 0);
-
-        var stem = string.Join('_', parts);
+        var stem = Sanitize(documentId);
         var ext = NormalizeExtension(extension);
         return ext.Length == 0 ? stem : $"{stem}.{ext}";
     }

@@ -78,11 +78,12 @@ public sealed class ImportOrchestrator : IImportOrchestrator
                 throw new InvalidOperationException(detail);
             }
 
-            var externalSourceRefBase = !string.IsNullOrWhiteSpace(document.SerialNumber)
-                ? document.SerialNumber
-                : job.DocumentId;
+            // documentId is the one identifier that's guaranteed present, stable
+            // across form revisions, and unique in Kuali. Using it as both the
+            // filename stem and EXTERNAL_SOURCE_REF keeps DIP lookups trivial.
+            var externalSourceRefBase = job.DocumentId;
 
-            var finalNames = BuildFinalNames(stagedFiles, document, job.OnBaseDocType);
+            var finalNames = BuildFinalNames(stagedFiles, job.DocumentId);
             await _events.LogAsync(job.Id, JobEventKind.FilesRenamed,
                 $"{finalNames.Count} file(s)",
                 finalNames.Select((n, i) => new { Staged = Path.GetFileName(stagedFiles[i]), Final = n }),
@@ -248,8 +249,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
 
     private static List<string> BuildFinalNames(
         IReadOnlyList<string> stagedFiles,
-        KualiDocument document,
-        string onbaseDocType)
+        string documentId)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<string>(stagedFiles.Count);
@@ -257,14 +257,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
         foreach (var staged in stagedFiles)
         {
             var ext = Path.GetExtension(staged).TrimStart('.');
-            var baseName = FileNameSanitizer.BuildContentFileName(
-                serialNumber: document.SerialNumber,
-                schoolId: document.SchoolId,
-                lastName: document.LastName,
-                firstName: document.FirstName,
-                onbaseDocType: onbaseDocType,
-                extension: ext);
-
+            var baseName = FileNameSanitizer.BuildContentFileName(documentId, ext);
             result.Add(FileNameSanitizer.MakeUnique(baseName, seen));
         }
 
