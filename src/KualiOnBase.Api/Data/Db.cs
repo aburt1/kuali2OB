@@ -32,8 +32,13 @@ public sealed class Db
         return conn;
     }
 
-    public void Migrate()
+    public void Migrate(ILogger? log = null)
     {
+        var path = new SqliteConnectionStringBuilder(_connectionString).DataSource;
+        var full = Path.GetFullPath(path);
+        var preExisted = File.Exists(full);
+        var preSize = preExisted ? new FileInfo(full).Length : 0;
+
         using var conn = Open();
         conn.Execute("""
             CREATE TABLE IF NOT EXISTS __Migrations (
@@ -71,5 +76,13 @@ public sealed class Db
                 tx);
             tx.Commit();
         }
+
+        // Surface persistence state on every boot so "why are my jobs gone?"
+        // is a one-log-line diagnosis, not a redeploy-and-pray loop.
+        var jobCount = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM ImportJobs;");
+        log?.LogInformation(
+            "SQLite DB at {Path} — preExisted={PreExisted}, preSizeBytes={PreSize}, jobRowCount={JobCount}. " +
+            "If preExisted is False on every redeploy, the /data volume is not persistent (configure Coolify persistent volume or use docker-compose).",
+            full, preExisted, preSize, jobCount);
     }
 }

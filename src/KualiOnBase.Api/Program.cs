@@ -42,7 +42,8 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-app.Services.GetRequiredService<Db>().Migrate();
+app.Services.GetRequiredService<Db>().Migrate(
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Db"));
 
 if (app.Environment.IsDevelopment())
 {
@@ -89,6 +90,7 @@ ImportEndpoint.Map(app);
 JobsEndpoint.Map(app);
 JobFilesEndpoint.Map(app);
 KualiExportCallbackEndpoint.Map(app);
+DiagnosticEndpoint.Map(app);
 
 static IAsyncPolicy<HttpResponseMessage> GetKualiRetryPolicy()
 {

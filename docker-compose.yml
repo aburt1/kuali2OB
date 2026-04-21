@@ -1,0 +1,40 @@
+# Coolify: deploy this via "Docker Compose" build pack instead of "Dockerfile"
+# so /data, /backup, and /target get mapped to named volumes that survive
+# redeploys. With the plain Dockerfile, Coolify's default for VOLUME directives
+# is anonymous volumes — recreated on every container rebuild, so the SQLite DB
+# (and backup folder, and delivered files if they happen to land inside /target)
+# get wiped on every push.
+#
+# Environment variables still come from Coolify's env UI:
+#   - AUTH__APIKEY
+#   - KUALI__APITOKEN
+#   - KUALI__PUBLICBASEURL
+#   - KUALI__CALLBACKSECRET
+#   - (anything else in appsettings.json you want to override)
+
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - kuali-onbase-data:/data
+      - kuali-onbase-backup:/backup
+      # /target is often a network share mounted on the host; map it to wherever
+      # OnBase's DIP import folder lives in your environment.
+      - kuali-onbase-target:/target
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Database__Path: /data/kuali-onbase.db
+      Backup__RootPath: /backup
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  kuali-onbase-data:
+  kuali-onbase-backup:
+  kuali-onbase-target:
