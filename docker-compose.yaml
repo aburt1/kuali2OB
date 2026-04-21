@@ -31,6 +31,11 @@ services:
       ASPNETCORE_URLS: http://+:8080
       Database__Path: /data/kuali-onbase.db
       Backup__RootPath: /backup
+      # targetFolderPath values from Kuali workflows must land under one of
+      # these absolute-path prefixes (semicolon-separated). Fail-secure: no
+      # default, so a misconfigured deploy refuses to boot rather than
+      # accepting arbitrary paths.
+      Import__AllowedTargetRoots: /target
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 30s
