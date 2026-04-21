@@ -812,7 +812,7 @@
             <dt>Keywords</dt><dd>${kws}</dd>
             <dt>Delete attachments</dt><dd>${j.deleteAttachments ? "yes" : "no"}</dd>
             <dt>Delete document</dt><dd>${j.deleteDocument ? "yes" : "no"}</dd>
-            <dt>Backup folder</dt><dd>${j.backupFolderName ? escapeHtml(j.backupFolderName) + ` <span style="color:var(--muted)">(inside Backup:RootPath)</span>` : (j.hasBackup ? '<span style="color:var(--muted)">(opaque)</span>' : '<span style="color:var(--muted)">—</span>')}</dd>
+            <dt>Backup folder</dt><dd>${j.backupFolderName ? escapeHtml(j.backupFolderName) + ` <span style="color:var(--muted)">(inside Backup:RootPath)</span>` : '<span style="color:var(--muted)">—</span>'}</dd>
             <dt>Files produced</dt><dd>${filesList}</dd>
             ${attemptLine}
             ${j.lastError ? `<dt>Last error</dt><dd class="error">${escapeHtml(j.lastError)}</dd>` : ""}
