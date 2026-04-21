@@ -321,6 +321,8 @@
     cursor: pointer;
   }
   .copy:hover { color: var(--text); }
+  /* Row-level copy: smaller and doesn't push layout around. */
+  .inline-copy { margin-left: 6px; padding: 0 4px; font-size: 10px; line-height: 14px; }
 
   /* Funnel */
   .funnel {
@@ -723,7 +725,7 @@
            tabindex="0"
            aria-expanded="${open}">
         <span class="docid">#${j.id}</span>
-        <span class="docid" title="${escapeHtml(j.documentId)}">${escapeHtml(j.documentId)}</span>
+        <span class="docid" title="${escapeHtml(j.documentId)}">${escapeHtml(j.documentId)}<button class="copy inline-copy" data-copy="${escapeHtml(j.documentId)}" aria-label="Copy documentId" onclick="event.stopPropagation()">copy</button></span>
         <span class="target" title="${escapeHtml(j.targetFolderPath)}">${escapeHtml(j.targetFolderPath)}</span>
         <span>${escapeHtml(j.downloadMode)}</span>
         <span>${j.files.length}</span>
@@ -810,6 +812,7 @@
           <dl>
             <dt>Created</dt><dd>${fmtRelative(j.createdAt)}<span style="color:var(--muted); margin-left:8px">${new Date(j.createdAt).toLocaleString()}</span></dd>
             <dt>Updated</dt><dd>${fmtRelative(j.updatedAt)}</dd>
+            <dt>documentId</dt><dd><code>${escapeHtml(j.documentId)}</code> <button class="copy" data-copy="${escapeHtml(j.documentId)}">copy</button></dd>
             <dt>OnBase DocType</dt><dd>${escapeHtml(j.onbaseDocType)}</dd>
             <dt>Keywords</dt><dd>${kws}</dd>
             <dt>Delete attachments</dt><dd>${j.deleteAttachments ? "yes" : "no"}</dd>
