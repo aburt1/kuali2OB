@@ -13,9 +13,16 @@ Ships with:
 
 ## Quick start — run locally
 
+### Option 1: `dotnet run` from the terminal
+
 ```bash
 git clone https://github.com/aburt1/kuali2OB
 cd kuali2OB
+export Auth__ApiKey="replace-with-a-local-api-key"
+export Kuali__ApiToken="replace-with-your-kuali-api-token"
+export Kuali__PublicBaseUrl="https://your-public-host-or-ngrok-url"
+export Kuali__CallbackSecret="replace-with-a-long-random-secret"
+export Import__AllowedTargetRoots="/absolute/path/you-will-write-into"
 dotnet run --project src/KualiOnBase.Api
 ```
 
@@ -23,7 +30,20 @@ Open <http://localhost:5050>, enter your API key, and the Auditor page will list
 
 To fire a one-off against a real Kuali document, POST to `/api/kuali-onbase-import` directly (see the curl example below).
 
-> Note: running locally, Kuali cannot reach your machine for the PDF export callback. For a real end-to-end test, deploy behind a public URL (see Deployment) or use a tunnel (`ngrok http 5050`) and set `Kuali:PublicBaseUrl` to the public URL.
+Notes:
+
+- `StartupValidator` will refuse to boot if `Auth__ApiKey`, `Kuali__ApiToken`, `Kuali__PublicBaseUrl`, `Kuali__CallbackSecret`, or `Import__AllowedTargetRoots` are missing or still set to placeholders.
+- If you want the local SQLite DB and backup folder somewhere explicit, also set `Database__Path` and `Backup__RootPath`.
+- Running locally, Kuali cannot reach your machine for the PDF export callback unless you expose it publicly. For a real end-to-end test, use a tunnel such as `ngrok http 5050` and set `Kuali__PublicBaseUrl` to that public URL.
+
+### Option 2: run from Visual Studio / IIS Express
+
+The repo already includes [launchSettings.json](/Users/aburt1/Desktop/kuali2OB/src/KualiOnBase.Api/Properties/launchSettings.json:1) with:
+
+- `http` profile on `http://localhost:5029`
+- `IIS Express` profile on `http://localhost:5565`
+
+Before launching from Visual Studio, set the same required configuration values as environment variables on your machine. `appsettings.Development.json` only contains logging overrides; it does not provide the required secrets or allowed target roots.
 
 ---
 
@@ -155,7 +175,7 @@ In the Kuali Build form/workflow editor, add an **HTTP Action** step to the appr
 
 For PDF export, Kuali renders asynchronously and calls *back* to this API when the signed URL is ready. You must:
 
-1. Set `Kuali:PublicBaseUrl` to a URL Kuali can reach (e.g. your Coolify hostname).
+1. Set `Kuali:PublicBaseUrl` to a URL Kuali can reach (e.g. your public Docker host name).
 2. The API exposes `POST /kuali-export-callback/{correlationId}?sig=...` — signed with HMAC-SHA256 of `Kuali:CallbackSecret`. No API key required (Kuali doesn't know it); the HMAC signature is the auth.
 
 When Kuali POSTs back with the signed S3 URL, the API picks it up, downloads the PDF, and continues.
@@ -171,7 +191,7 @@ All settings bind from either `appsettings.json` or environment variables. **In 
 | `Auth__ApiKey` | `Auth:ApiKey` | `CHANGEME` | Required header for every `/api/*` request |
 | `Kuali__BaseUrl` | `Kuali:BaseUrl` | `https://csub.kualibuild.com` | Kuali tenant root |
 | `Kuali__ApiToken` | `Kuali:ApiToken` | `CHANGEME` | Kuali API token (Bearer) for GraphQL |
-| `Kuali__PublicBaseUrl` | `Kuali:PublicBaseUrl` | *empty* | Public URL Kuali callbacks reach (e.g. `https://kuali2ob.your-coolify-host`) |
+| `Kuali__PublicBaseUrl` | `Kuali:PublicBaseUrl` | *empty* | Public URL Kuali callbacks reach (e.g. `https://kuali2ob.your-public-host`) |
 | `Kuali__CallbackSecret` | `Kuali:CallbackSecret` | `CHANGEME` | HMAC-SHA256 secret for signing callback URLs |
 | `Kuali__ExportTimeZone` | `Kuali:ExportTimeZone` | `America/Los_Angeles` | Passed to Kuali `exportDocument` |
 | `Kuali__ExportCallbackTimeoutSeconds` | `Kuali:ExportCallbackTimeoutSeconds` | `180` | How long to wait for Kuali's callback |
@@ -196,7 +216,7 @@ All settings bind from either `appsettings.json` or environment variables. **In 
 
 ---
 
-## Deployment — Docker / Coolify
+## Deployment — Docker
 
 Multi-stage `Dockerfile` is at the repo root. Build & run:
 
@@ -215,19 +235,85 @@ docker run -d \
   kuali2ob
 ```
 
-On Coolify:
+Run notes:
 
-1. Add a new **Docker** service pointing at this repo.
-2. Set the three volumes: `/data` (SQLite), `/backup` (dated PDF backups), `/target` (your OnBase DIP mount).
-3. Fill the env vars above in the Coolify secrets panel.
-4. Expose port `8080` behind a public hostname.
-5. Use that hostname as `Kuali__PublicBaseUrl`.
+1. Mount `/data` for SQLite persistence.
+2. Mount `/backup` for dated backup copies.
+3. Mount your OnBase drop location and make sure it is included under `Import__AllowedTargetRoots`.
+4. Provide the required env vars at container start.
+5. Expose the container behind a public hostname and use that hostname as `Kuali__PublicBaseUrl`.
+
+### Deployment — IIS (Windows Server)
+
+This app can also run behind IIS using the ASP.NET Core Module.
+
+1. Install prerequisites on the IIS server:
+   - IIS with the `Web Server` role
+   - ASP.NET Core Hosting Bundle for .NET 8
+   - Access from the server to your OnBase target share and any backup/data folders
+
+2. Publish the app:
+
+```powershell
+dotnet publish .\src\KualiOnBase.Api\KualiOnBase.Api.csproj `
+  -c Release `
+  -o C:\inetpub\kuali2ob\publish
+```
+
+`dotnet publish` will generate the `web.config` IIS needs in the publish folder.
+
+3. Create writable folders on the server, for example:
+
+```powershell
+New-Item -ItemType Directory -Force C:\inetpub\kuali2ob\data
+New-Item -ItemType Directory -Force C:\inetpub\kuali2ob\backup
+```
+
+4. Set required configuration as **system environment variables** for the IIS worker process, for example:
+
+```powershell
+[Environment]::SetEnvironmentVariable("Auth__ApiKey", "replace-with-api-key", "Machine")
+[Environment]::SetEnvironmentVariable("Kuali__ApiToken", "replace-with-kuali-token", "Machine")
+[Environment]::SetEnvironmentVariable("Kuali__PublicBaseUrl", "https://your-public-iis-hostname", "Machine")
+[Environment]::SetEnvironmentVariable("Kuali__CallbackSecret", "replace-with-a-long-random-secret", "Machine")
+[Environment]::SetEnvironmentVariable("Import__AllowedTargetRoots", "\\onbase-prod\DIP", "Machine")
+[Environment]::SetEnvironmentVariable("Database__Path", "C:\inetpub\kuali2ob\data\kuali-onbase.db", "Machine")
+[Environment]::SetEnvironmentVariable("Backup__RootPath", "C:\inetpub\kuali2ob\backup", "Machine")
+```
+
+5. In IIS Manager:
+   - Create a new **Application Pool**
+   - Set **.NET CLR version** to **No Managed Code**
+   - Set the pool identity to an account that can read/write the target share, DB path, and backup path
+   - Create a new **Site** (or Application) pointing to `C:\inetpub\kuali2ob\publish`
+
+6. Grant filesystem/share permissions:
+   - IIS app-pool identity must be able to write `Database__Path`
+   - IIS app-pool identity must be able to write `Backup__RootPath`
+   - IIS app-pool identity must be able to write every folder under `Import__AllowedTargetRoots`
+
+7. Restart IIS after setting environment variables:
+
+```powershell
+iisreset
+```
+
+8. Verify:
+   - browse to `https://your-public-iis-hostname/health`
+   - browse to `https://your-public-iis-hostname/health/ready`
+   - open the dashboard at `https://your-public-iis-hostname/`
+
+IIS-specific notes:
+
+- `Kuali__PublicBaseUrl` must be the externally reachable IIS URL, not `localhost`.
+- If you host under HTTPS termination in IIS, keep the public URL HTTPS so Kuali's callback URL remains valid.
+- If the app pool identity is a domain/service account for SMB access, make sure both NTFS and share permissions allow writes.
 
 ---
 
 ## Operations
 
-**Health checks.** Point Coolify (or any orchestrator) at these:
+**Health checks.** Point Docker health checks, your reverse proxy, or any orchestrator at these:
 
 | Endpoint | Purpose | Codes |
 |---|---|---|
@@ -250,7 +336,7 @@ Open the root URL (default `/`). On first visit, click **API key** and paste you
 
 - Lists the most recent 100 jobs (polls every 3s)
 - Click a row to expand: left pane = metadata, right pane = **event timeline** showing every stage (Kuali fetch, signed URL, downloads, rename, copy, index write, success/fail)
-- Each event has a `payload` toggle that reveals the exact JSON — including the signed PDF URL Kuali returned, attachment metadata, file byte counts, and the full DIP index file content
+- Each event has a `payload` toggle that reveals sanitized JSON — attachment metadata, file byte counts, and the full DIP index file content. Sensitive upstream URLs are redacted before they reach the browser.
 - **Replay with changes** — every job row exposes a button that re-opens its parameters in a dialog; edit anything (target folder, keywords, delete flags, download mode) and re-submit. Useful for reissuing a failed job after fixing its inputs, or for testing a param change against the same document without touching Kuali Build's workflow config.
 
 To disable the page entirely in production: `Ui__Enabled=false`.
@@ -307,9 +393,9 @@ Why not just put `Auth__ApiKey` in the URL? A single static key in logs everywhe
 
 `ApiKeyMiddleware` only guards `/api/*`. The callback endpoint is at `/kuali-export-callback/{id}` so it bypasses the middleware entirely. The compensating control is the HMAC above. This is an explicit design choice: the middleware stays simple and doesn't need a carve-out for unauthenticated traffic.
 
-### Bare `HttpClient` for downloading signed S3 URLs
+### Separate client for downloading signed URLs
 
-When downloading from the AWS-signed URL Kuali returns, `KualiClient` uses `new HttpClient()` rather than the typed `IKualiClient` instance that carries the Bearer token. The signed URL already contains its own auth (AWS query-string signature); sending our Kuali `Authorization` header to an AWS endpoint would needlessly expose the token to a third party.
+When downloading from the signed URL Kuali returns, `KualiClient` uses a separate named `HttpClient` rather than the typed `IKualiClient` instance that carries the Bearer token. The signed URL already contains its own auth; sending our Kuali `Authorization` header to a third-party endpoint would needlessly expose the token. Relative same-origin Kuali downloads still use the authenticated client, but absolute external URLs do not.
 
 ### Synchronous happy path, asynchronous retry fallback
 
@@ -328,9 +414,9 @@ One process, one file, one binary. No external dependencies, no ORM ceremony. Jo
 
 ### Event log per job, exposed to the dashboard
 
-Every stage (`DocumentFetched`, `ExportRequested`, `ExportCallbackReceived`, `PdfDownloaded`, `AttachmentDownloaded`, `FilesRenamed`, `BackupCreated`, `FilesCopiedToTarget`, `IndexFileWritten`, `AttachmentsCleared`, `DocumentDeleted`, `ImportSucceeded`/`ImportFailed`) records a row in `JobEvents` with the raw JSON payload — including the signed S3 URL Kuali returned, attachment metadata, byte counts, and the exact DIP index file content written to disk.
+Every stage (`DocumentFetched`, `ExportRequested`, `ExportCallbackReceived`, `PdfDownloaded`, `AttachmentDownloaded`, `FilesRenamed`, `BackupCreated`, `FilesCopiedToTarget`, `IndexFileWritten`, `AttachmentsCleared`, `DocumentDeleted`, `ImportSucceeded`/`ImportFailed`) records a row in `JobEvents` with structured payload data such as attachment metadata, byte counts, and the exact DIP index file content written to disk.
 
-This is the audit trail. It lets you confirm *after the fact* what Kuali actually sent and what landed in OnBase, which is the only way to debug discrepancies without re-running a job.
+This is the audit trail. It lets you confirm *after the fact* what Kuali actually sent and what landed in OnBase without re-running a job. When payloads are returned to the browser, sensitive upstream URLs are redacted.
 
 Logging is wrapped in `try/catch` that swallows errors — **the event log must never break a job**.
 
@@ -362,7 +448,7 @@ The `/api/kuali-onbase-import` endpoint takes all parameters as query-string, no
 
 **401 from your own API in the dashboard** — the bearer token the browser stored no longer matches `Auth__ApiKey`. Click **API key** and re-enter it.
 
-**Callback never arrives** — confirm `Kuali__PublicBaseUrl` is actually reachable from Kuali's network (they're in AWS us-west-2). Coolify + a public hostname works; localhost does not.
+**Callback never arrives** — confirm `Kuali__PublicBaseUrl` is actually reachable from Kuali's network (they're in AWS us-west-2). A public hostname works; localhost does not.
 
 **`downloadMode=pdf` is only returning the form render — attachments are missing** — the Kuali tenant setting "Include PDFs uploaded through the form" is off. See [Kuali tenant prerequisite](#kuali-tenant-prerequisite--include-pdfs-uploaded-through-the-form) above. Either turn the setting on (simplest), or switch the workflow to `downloadMode=attachments` for raw attachment files.
 
