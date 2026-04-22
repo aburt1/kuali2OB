@@ -11,6 +11,24 @@ Ships with:
 
 ---
 
+## Integration flow
+
+At a high level, the integration works like this:
+
+1. A Kuali Build workflow sends `POST /api/kuali-onbase-import` with the Kuali document id, the target OnBase DIP folder, the OnBase document type, and any keyword pairs to write into the DIP index file.
+2. This API authenticates the request with `Authorization: Bearer <key>`, validates the target path against `Import__AllowedTargetRoots`, and creates a job record plus event timeline in SQLite.
+3. The API calls Kuali's GraphQL API to load the document metadata and decide what to download:
+   - `downloadMode=pdf` asks Kuali to export a single PDF and waits for Kuali's callback with the signed download URL.
+   - `downloadMode=attachments` downloads the raw attachment files directly from Kuali in their original formats.
+4. The downloaded file or files are staged locally, renamed into OnBase-safe filenames, copied into a dated backup folder, then copied into the target OnBase DIP folder.
+5. The API writes the DIP index text file that OnBase uses for indexing, using the requested `onbaseDocType` plus any `KeywordKeyN` / `KeywordValueN` pairs.
+6. If requested, the API then clears the attachment fields and/or deletes the source document in Kuali after the OnBase copy succeeds.
+7. The dashboard at `/` reads the stored job and event data so operators can see what happened, inspect sanitized payloads, replay jobs, and troubleshoot failures without rerunning the Kuali workflow blindly.
+
+In short: Kuali is the source system, this API is the orchestrator and audit trail, and OnBase DIP is the destination drop folder.
+
+---
+
 ## Quick start — run locally
 
 ### Option 1: `dotnet run` from the terminal
