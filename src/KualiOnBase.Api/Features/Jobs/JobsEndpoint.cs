@@ -81,7 +81,7 @@ public static class JobsEndpoint
         catch (JsonException) { return Array.Empty<string>(); }
     }
 
-    private static JsonNode? ParsePayload(string? json)
+    internal static JsonNode? ParsePayload(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
         try
@@ -100,20 +100,22 @@ public static class JobsEndpoint
 
         if (node is JsonObject obj)
         {
-            foreach (var key in obj.Select(kvp => kvp.Key).ToList())
+            var sanitized = new JsonObject();
+            foreach (var entry in obj)
             {
-                obj[key] = SanitizePayload(obj[key], key);
+                sanitized[entry.Key] = SanitizePayload(entry.Value, entry.Key);
             }
-            return obj;
+            return sanitized;
         }
 
         if (node is JsonArray arr)
         {
+            var sanitized = new JsonArray();
             for (var i = 0; i < arr.Count; i++)
             {
-                arr[i] = SanitizePayload(arr[i], propertyName);
+                sanitized.Add(SanitizePayload(arr[i], propertyName));
             }
-            return arr;
+            return sanitized;
         }
 
         if (node is JsonValue value
@@ -123,7 +125,7 @@ public static class JobsEndpoint
             return JsonValue.Create("[redacted]");
         }
 
-        return node;
+        return node.DeepClone();
     }
 
     private static bool IsSensitiveProperty(string? propertyName) =>
