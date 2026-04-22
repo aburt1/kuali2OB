@@ -102,15 +102,15 @@ public static class KualiExportCallbackEndpoint
             return Results.BadRequest(new { error = "Missing URL in callback payload." });
         }
 
-        // http/https only — otherwise a relative "/etc/passwd" would be combined
-        // with Kuali:BaseUrl later, turning this into authenticated SSRF with our
-        // Bearer token attached.
-        if (!IsHttpUrl(url!))
+        // Require HTTPS here. The resolved URL can eventually be fetched by a
+        // client that knows the Kuali bearer token, so allowing plaintext HTTP
+        // would create a credential-leak path on same-host callback URLs.
+        if (!IsHttpsUrl(url!))
         {
             await store.MarkFailedAsync(correlationId,
-                "Callback payload URL must use http or https scheme.", ct);
-            log.LogWarning("Callback for {DocumentId} had non-http URL; rejected.", row.DocumentId);
-            return Results.BadRequest(new { error = "Callback URL must be http(s)." });
+                "Callback payload URL must use https scheme.", ct);
+            log.LogWarning("Callback for {DocumentId} had non-https URL; rejected.", row.DocumentId);
+            return Results.BadRequest(new { error = "Callback URL must be https." });
         }
 
         var completed = await store.MarkCompletedAsync(correlationId, url!, ct);
@@ -143,9 +143,9 @@ public static class KualiExportCallbackEndpoint
         return Encoding.UTF8.GetString(buffer, 0, total);
     }
 
-    private static bool IsHttpUrl(string value) =>
+    private static bool IsHttpsUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var u)
-        && (u!.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps);
+        && u!.Scheme == Uri.UriSchemeHttps;
 
     // Kuali's callback body shape is not strongly documented, so accept several forms:
     //   - JSON: { "url": "..." } / { "signedUrl": "..." } / { "downloadUrl": "..." } / { "pdfUrl": "..." }
@@ -216,4 +216,3 @@ public static class KualiExportCallbackEndpoint
         return null;
     }
 }
-

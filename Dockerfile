@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY global.json KualiOnBase.sln ./
+COPY global.json KualiOnBase.Api.sln ./
 COPY src/KualiOnBase.Api/KualiOnBase.Api.csproj src/KualiOnBase.Api/
 RUN dotnet restore src/KualiOnBase.Api/KualiOnBase.Api.csproj
 COPY src/ src/

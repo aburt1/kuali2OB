@@ -173,13 +173,10 @@ public sealed class KualiClient : IKualiClient
 
     internal (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
     {
-        // Only treat http(s) as truly absolute — on Unix a leading-slash path
-        // parses as file:// under Uri.TryCreate, which we don't want.
-        var isHttp =
-            Uri.TryCreate(url, UriKind.Absolute, out var absolute)
-            && (absolute!.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps);
-
-        if (!isHttp)
+        // Treat only relative paths as "same Kuali origin, send Bearer". Absolute
+        // URLs are handled explicitly so `file://` and plaintext `http://` never
+        // get mistaken for safe authenticated Kuali downloads.
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var absolute))
         {
             if (_http.BaseAddress is null)
             {
@@ -189,9 +186,19 @@ public sealed class KualiClient : IKualiClient
             return (new Uri(_http.BaseAddress, url.TrimStart('/')), UseAuth: true);
         }
 
-        var sameHost = _http.BaseAddress is { } baseUri
-            && string.Equals(absolute!.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase);
-        return (absolute!, UseAuth: sameHost);
+        if (absolute.Scheme != Uri.UriSchemeHttp && absolute.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported download URL scheme '{absolute.Scheme}' for '{url}'.");
+        }
+
+        var sameAuthority = _http.BaseAddress is { } baseUri
+            && baseUri.Scheme == Uri.UriSchemeHttps
+            && absolute.Scheme == Uri.UriSchemeHttps
+            && string.Equals(absolute.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase)
+            && absolute.Port == baseUri.Port;
+
+        return (absolute, UseAuth: sameAuthority);
     }
 
     public async Task ClearAttachmentsAsync(

@@ -93,7 +93,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
                     a.Id,
                     a.FieldPath,
                     a.FileName,
-                    a.Url,
+                    HasUrl = !string.IsNullOrWhiteSpace(a.Url),
                 }),
                 RawData = ParseRawData(document.RawDataJson),
             },
@@ -233,7 +233,7 @@ public sealed class ImportOrchestrator : IImportOrchestrator
 
         await _events.LogAsync(job.Id, JobEventKind.ExportCallbackReceived,
             "signed URL received",
-            new { SignedUrl = url },
+            new { HasSignedUrl = !string.IsNullOrWhiteSpace(url) },
             ct);
 
         var pdfPath = Path.Combine(tempRoot, $"export-{document.Id}.pdf");
@@ -265,7 +265,13 @@ public sealed class ImportOrchestrator : IImportOrchestrator
 
             await _events.LogAsync(job.Id, JobEventKind.AttachmentDownloaded,
                 $"{att.FileName} ({size:N0} bytes)",
-                new { att.FieldPath, att.FileName, att.Url, Bytes = size },
+                new
+                {
+                    att.FieldPath,
+                    att.FileName,
+                    HasUrl = !string.IsNullOrWhiteSpace(att.Url),
+                    Bytes = size,
+                },
                 ct);
 
             files.Add(local);

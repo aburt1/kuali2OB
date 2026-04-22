@@ -84,7 +84,62 @@ public static class JobsEndpoint
     private static JsonNode? ParsePayload(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
-        try { return JsonNode.Parse(json); }
+        try
+        {
+            return SanitizePayload(JsonNode.Parse(json));
+        }
         catch (JsonException) { return null; }
     }
+
+    private static JsonNode? SanitizePayload(JsonNode? node, string? propertyName = null)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonObject obj)
+        {
+            foreach (var key in obj.Select(kvp => kvp.Key).ToList())
+            {
+                obj[key] = SanitizePayload(obj[key], key);
+            }
+            return obj;
+        }
+
+        if (node is JsonArray arr)
+        {
+            for (var i = 0; i < arr.Count; i++)
+            {
+                arr[i] = SanitizePayload(arr[i], propertyName);
+            }
+            return arr;
+        }
+
+        if (node is JsonValue value
+            && value.TryGetValue<string>(out var text)
+            && (IsSensitiveProperty(propertyName) || LooksLikeHttpUrl(text)))
+        {
+            return JsonValue.Create("[redacted]");
+        }
+
+        return node;
+    }
+
+    private static bool IsSensitiveProperty(string? propertyName) =>
+        propertyName is not null && propertyName switch
+        {
+            var name when name.Equals("url", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("signedUrl", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("downloadUrl", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("pdfUrl", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("href", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("temporaryUrl", StringComparison.OrdinalIgnoreCase) => true,
+            var name when name.Equals("permaLink", StringComparison.OrdinalIgnoreCase) => true,
+            _ => false,
+        };
+
+    private static bool LooksLikeHttpUrl(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 }
