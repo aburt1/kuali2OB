@@ -38,7 +38,7 @@ git clone https://github.com/aburt1/kuali2OB
 cd kuali2OB
 export Auth__ApiKey="replace-with-a-local-api-key"
 export Kuali__ApiToken="replace-with-your-kuali-api-token"
-export Kuali__PublicBaseUrl="https://your-public-host-or-ngrok-url"
+export Kuali__PublicBaseUrl="https://your-public-host"
 export Kuali__CallbackSecret="replace-with-a-long-random-secret"
 export Import__AllowedTargetRoots="/absolute/path/you-will-write-into"
 dotnet run --project src/KualiOnBase.Api
@@ -52,7 +52,7 @@ Notes:
 
 - `StartupValidator` will refuse to boot if `Auth__ApiKey`, `Kuali__ApiToken`, `Kuali__PublicBaseUrl`, `Kuali__CallbackSecret`, or `Import__AllowedTargetRoots` are missing or still set to placeholders.
 - If you want the local SQLite DB and backup folder somewhere explicit, also set `Database__Path` and `Backup__RootPath`.
-- Running locally, Kuali cannot reach your machine for the PDF export callback unless you expose it publicly. For a real end-to-end test, use a tunnel such as `ngrok http 5050` and set `Kuali__PublicBaseUrl` to that public URL.
+- Running locally, Kuali cannot reach your machine for the PDF export callback unless you expose it publicly. For a real end-to-end test, publish the app behind a publicly reachable HTTPS URL and set `Kuali__PublicBaseUrl` to that public URL.
 
 ### Option 2: run from Visual Studio / IIS Express
 
