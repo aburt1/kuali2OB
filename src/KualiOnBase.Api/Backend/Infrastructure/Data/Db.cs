@@ -48,9 +48,9 @@ public sealed class Db
         """);
 
         var assembly = Assembly.GetExecutingAssembly();
-        var ns = typeof(Db).Namespace + ".Migrations.";
         var resources = assembly.GetManifestResourceNames()
-            .Where(n => n.StartsWith(ns, StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
+            .Where(n => n.Contains(".Migrations.", StringComparison.Ordinal)
+                && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToList();
 
@@ -60,7 +60,7 @@ public sealed class Db
 
         foreach (var resourceName in resources)
         {
-            var name = resourceName.Substring(ns.Length);
+            var name = resourceName[(resourceName.LastIndexOf(".Migrations.", StringComparison.Ordinal) + ".Migrations.".Length)..];
             if (applied.Contains(name)) continue;
 
             using var stream = assembly.GetManifestResourceStream(resourceName)
