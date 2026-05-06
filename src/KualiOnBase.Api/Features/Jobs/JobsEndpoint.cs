@@ -16,7 +16,7 @@ public static class JobsEndpoint
     {
         return app.MapGet("/api/jobs", async (
             RetryQueue queue,
-            IJobEventLog events,
+            JobEventLog events,
             int? limit,
             CancellationToken ct) =>
         {

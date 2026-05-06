@@ -1,16 +1,99 @@
-using KualiOnBase.Api.Configuration;
-using Microsoft.Extensions.Options;
 using System.Net.Mail;
+using Microsoft.Extensions.Options;
 
 namespace KualiOnBase.Api.Configuration;
 
-// Refuses to boot when critical config is missing or still the shipped
-// placeholder. Catches the #1 deploy mistake: env vars not injected, app boots
-// "successfully", first request silently exposes the misconfig.
+public sealed class AuthOptions
+{
+    public const string SectionName = "Auth";
+
+    public string ApiKey { get; set; } = string.Empty;
+}
+
+public sealed class BackupOptions
+{
+    public const string SectionName = "Backup";
+
+    public string RootPath { get; set; } = string.Empty;
+    public int RetentionDays { get; set; } = 30;
+    public int CleanupIntervalHours { get; set; } = 24;
+}
+
+public sealed class DatabaseOptions
+{
+    public const string SectionName = "Database";
+
+    public string Path { get; set; } = "./data/kuali-onbase.db";
+}
+
+public sealed class ImportOptions
+{
+    public const string SectionName = "Import";
+
+    // Semicolon-separated list of absolute path prefixes that `targetFolderPath`
+    // requests are allowed to land under. Empty means every request is rejected.
+    public string AllowedTargetRoots { get; set; } = string.Empty;
+
+    public IReadOnlyList<string> ParseAllowedRoots() =>
+        string.IsNullOrWhiteSpace(AllowedTargetRoots)
+            ? Array.Empty<string>()
+            : AllowedTargetRoots
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(Path.GetFullPath)
+                .ToArray();
+}
+
+public sealed class KualiOptions
+{
+    public const string SectionName = "Kuali";
+
+    public string BaseUrl { get; set; } = string.Empty;
+    public string ApiToken { get; set; } = string.Empty;
+    public string PublicBaseUrl { get; set; } = string.Empty;
+    public string CallbackSecret { get; set; } = string.Empty;
+    public string ExportTimeZone { get; set; } = "America/Los_Angeles";
+    public int ExportCallbackTimeoutSeconds { get; set; } = 180;
+    public int ExportCallbackPollMilliseconds { get; set; } = 500;
+}
+
+public sealed class NotificationsOptions
+{
+    public const string SectionName = "Notifications";
+
+    public EmailOptions Email { get; set; } = new();
+
+    public sealed class EmailOptions
+    {
+        public bool Enabled { get; set; }
+        public string SmtpHost { get; set; } = string.Empty;
+        public int SmtpPort { get; set; } = 25;
+        public string? SmtpUsername { get; set; }
+        public string? SmtpPassword { get; set; }
+        public bool UseSsl { get; set; }
+        public string From { get; set; } = string.Empty;
+        public string To { get; set; } = string.Empty;
+    }
+}
+
+public sealed class RetryOptions
+{
+    public const string SectionName = "Retry";
+
+    public int MaxAttempts { get; set; } = 5;
+    public int BaseDelaySeconds { get; set; } = 60;
+    public int PollIntervalSeconds { get; set; } = 30;
+    public int SucceededJobRetentionDays { get; set; } = 30;
+}
+
+public sealed class UiOptions
+{
+    public const string SectionName = "Ui";
+
+    public bool Enabled { get; set; } = true;
+}
+
 public static class StartupValidator
 {
-    // The sample values we actually ship in appsettings.json / README.
-    // MinSecretLength catches everything else (no real secret is 8 chars).
     private static readonly HashSet<string> Placeholders = new(StringComparer.OrdinalIgnoreCase)
     {
         "CHANGEME", "CHANGE_ME", "<SET-ME>",
@@ -37,15 +120,10 @@ public static class StartupValidator
         RequireAbsoluteUri(errors, "Kuali:BaseUrl", kuali.BaseUrl);
         RequireAbsoluteUri(errors, "Kuali:PublicBaseUrl", kuali.PublicBaseUrl);
 
-        // At least one allowed target root, and each must be an absolute path.
-        // Without this the import endpoint would accept arbitrary paths (any
-        // location the container user can write — /etc, /, another share, …).
         var roots = import.ParseAllowedRoots();
         if (roots.Count == 0)
         {
-            errors.Add("Import:AllowedTargetRoots is not set. " +
-                       "Configure at least one absolute path prefix (semicolon-separated) " +
-                       "that targetFolderPath is permitted to land under.");
+            errors.Add("Import:AllowedTargetRoots is not set. Configure at least one absolute path prefix.");
         }
         else
         {
@@ -63,9 +141,6 @@ public static class StartupValidator
             Require(errors, "Notifications:Email:SmtpHost", notifs.Email.SmtpHost);
             Require(errors, "Notifications:Email:From", notifs.Email.From);
             Require(errors, "Notifications:Email:To", notifs.Email.To);
-
-            // Parse each entry once at startup so bad recipients surface at deploy
-            // time, not at 3am when a job actually fails.
             ValidateEmailAddress(errors, "Notifications:Email:From", notifs.Email.From);
             ValidateEmailCsv(errors, "Notifications:Email:To", notifs.Email.To);
         }
@@ -91,12 +166,14 @@ public static class StartupValidator
             errors.Add($"{name} is not set.");
             return;
         }
+
         var trimmed = value.Trim();
         if (Placeholders.Contains(trimmed))
         {
             errors.Add($"{name} is still set to a known placeholder (\"{trimmed}\").");
             return;
         }
+
         if (secret && trimmed.Length < MinSecretLength)
         {
             errors.Add($"{name} is shorter than {MinSecretLength} characters; generate a real secret.");
@@ -105,7 +182,7 @@ public static class StartupValidator
 
     private static void RequireAbsoluteUri(List<string> errors, string name, string? value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return; // already caught by Require
+        if (string.IsNullOrWhiteSpace(value)) return;
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {

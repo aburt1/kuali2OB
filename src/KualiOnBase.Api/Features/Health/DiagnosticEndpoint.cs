@@ -26,12 +26,6 @@ public static class DiagnosticEndpoint
     public static RouteHandlerBuilder MapProbeExport(IEndpointRouteBuilder app) =>
         app.MapPost("/api/diag/kuali-probe-export", HandleProbeExport);
 
-    public static void Map(IEndpointRouteBuilder app)
-    {
-        MapDbStatus(app);
-        MapProbeExport(app);
-    }
-
     public record DbStatus(
         bool Exists,
         long SizeBytes,

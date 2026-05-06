@@ -4,13 +4,6 @@ using KualiOnBase.Api.Infrastructure.Data;
 
 namespace KualiOnBase.Api.Features.Jobs;
 
-public interface IJobEventLog
-{
-    Task LogAsync(long jobId, string kind, string? message, object? payload, CancellationToken ct);
-    Task<IReadOnlyList<JobEventRow>> ListForJobAsync(long jobId, CancellationToken ct);
-    Task<IReadOnlyList<JobEventRow>> ListForJobsAsync(IReadOnlyCollection<long> jobIds, CancellationToken ct);
-}
-
 public sealed class JobEventRow
 {
     public long Id { get; set; }
@@ -21,7 +14,7 @@ public sealed class JobEventRow
     public string? PayloadJson { get; set; }
 }
 
-public sealed class JobEventLog : IJobEventLog
+public sealed class JobEventLog
 {
     private static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web)
     {
@@ -110,6 +103,7 @@ public static class JobEventKind
     public const string IndexFileWritten = "IndexFileWritten";
     public const string AttachmentsCleared = "AttachmentsCleared";
     public const string DocumentDeleted = "DocumentDeleted";
+    public const string CleanupDeferred = "CleanupDeferred";
     public const string ImportSucceeded = "ImportSucceeded";
     public const string ImportFailed = "ImportFailed";
 }

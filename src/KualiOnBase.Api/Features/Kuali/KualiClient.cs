@@ -173,11 +173,22 @@ public sealed class KualiClient : IKualiClient
 
     internal (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
     {
-        // Treat only relative paths as "same Kuali origin, send Bearer". Absolute
-        // URLs are handled explicitly so `file://` and plaintext `http://` never
-        // get mistaken for safe authenticated Kuali downloads.
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var absolute))
+        // Treat only real http(s) URLs as absolute. Root-relative values like
+        // `/files/123` parse as file:// when forced through UriKind.Absolute, but
+        // they are still valid same-origin Kuali paths and should keep the Bearer.
+        Uri? absolute = null;
+        var isHttpAbsolute =
+            Uri.TryCreate(url, UriKind.Absolute, out absolute)
+            && absolute is not null
+            && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps);
+
+        if (!isHttpAbsolute)
         {
+            if (!Uri.TryCreate(url, UriKind.Relative, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported download URL scheme for '{url}'.");
+            }
             if (_http.BaseAddress is null)
             {
                 throw new InvalidOperationException(
@@ -186,19 +197,13 @@ public sealed class KualiClient : IKualiClient
             return (new Uri(_http.BaseAddress, url.TrimStart('/')), UseAuth: true);
         }
 
-        if (absolute.Scheme != Uri.UriSchemeHttp && absolute.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new InvalidOperationException(
-                $"Unsupported download URL scheme '{absolute.Scheme}' for '{url}'.");
-        }
-
         var sameAuthority = _http.BaseAddress is { } baseUri
             && baseUri.Scheme == Uri.UriSchemeHttps
-            && absolute.Scheme == Uri.UriSchemeHttps
+            && absolute!.Scheme == Uri.UriSchemeHttps
             && string.Equals(absolute.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase)
             && absolute.Port == baseUri.Port;
 
-        return (absolute, UseAuth: sameAuthority);
+        return (absolute!, UseAuth: sameAuthority);
     }
 
     public async Task ClearAttachmentsAsync(
