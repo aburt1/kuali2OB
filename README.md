@@ -365,18 +365,13 @@ To disable the page entirely in production: `Ui__Enabled=false`.
 
 ```
 src/KualiOnBase.Api/
-  Auth/                    ApiKeyMiddleware
-  BackgroundServices/      RetryWorker, BackupCleanupWorker
-  Data/                    Db + SQL migrations (embedded resources)
-  Endpoints/               ImportEndpoint, JobsEndpoint, KualiExportCallbackEndpoint
-  Models/                  Request/response/domain types
-  Options/                 Strongly-typed config bindings
-  Services/
-    Kuali/                 KualiClient (GraphQL), ExportCallbackStore
-    Import/                ImportOrchestrator, BackupService, FileNameSanitizer, IndexFileBuilder
-    RetryQueue.cs          Dapper CRUD over ImportJobs
-    JobEventLog.cs         Per-job event log with payloads
-  wwwroot/index.html       Auditor / Visualizer page (vanilla HTML/CSS/JS)
+  Configuration/Configuration.cs  All config option classes + startup validation
+  Frontend/index.html      Auditor / visualizer page (vanilla HTML/CSS/JS)
+  Features/Import/         Backend import flow in one file: ImportFeature.cs
+  Features/Jobs/           Backend job dashboard/file APIs
+  Features/Kuali/          Backend Kuali GraphQL/download/callback integration
+  Features/Notifications/  Backend failure email notifications
+  Infrastructure/          Auth middleware + Db + SQL migrations
 tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
 ```
 

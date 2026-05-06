@@ -8,6 +8,7 @@ using KualiOnBase.Api.Features.Health;
 using KualiOnBase.Api.Configuration;
 using KualiOnBase.Api.Features.Notifications;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.FileProviders;
 using Polly;
 using Polly.Extensions.Http;
 using Serilog;
@@ -30,10 +31,10 @@ builder.Services.Configure<ImportOptions>(builder.Configuration.GetSection(Impor
 
 builder.Services.AddSingleton<Db>();
 builder.Services.AddScoped<RetryQueue>();
-builder.Services.AddScoped<IBackupService, BackupService>();
-builder.Services.AddScoped<IImportOrchestrator, ImportOrchestrator>();
+builder.Services.AddScoped<BackupService>();
+builder.Services.AddScoped<ImportOrchestrator>();
 builder.Services.AddScoped<IExportCallbackStore, ExportCallbackStore>();
-builder.Services.AddScoped<IJobEventLog, JobEventLog>();
+builder.Services.AddScoped<JobEventLog>();
 builder.Services.AddSingleton<INotificationService, EmailNotificationService>();
 
 // Explicit Timeout on the named HttpClient: covers SendAsync (connect + headers)
@@ -136,8 +137,10 @@ app.UseSerilogRequestLogging();
 var uiEnabled = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<UiOptions>>().Value.Enabled;
 if (uiEnabled)
 {
-    app.UseDefaultFiles();
-    app.UseStaticFiles();
+    var frontend = new PhysicalFileProvider(
+        Path.Combine(app.Environment.ContentRootPath, "Frontend"));
+    app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = frontend });
+    app.UseStaticFiles(new StaticFileOptions { FileProvider = frontend });
 }
 
 // Auth BEFORE rate-limit on purpose: the rate limiter partitions by bearer
