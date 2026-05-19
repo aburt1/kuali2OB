@@ -31,22 +31,7 @@ public interface IKualiClient
     Task DeleteDocumentAsync(string documentId, CancellationToken ct);
 }
 
-public interface IExportCallbackStore
-{
-    Task CreatePendingAsync(string correlationId, string documentId, CancellationToken ct);
-    Task<ExportCallbackRow?> GetAsync(string correlationId, CancellationToken ct);
-
-    // Returns true iff the row transitioned from Pending to Completed. False means
-    // the row was already Completed/Failed — the caller lost the race (legitimate
-    // duplicate) or is an attacker trying to overwrite a finalized state.
-    Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct);
-    Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct);
-
-    Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct);
-}
-
-
-public sealed class ExportCallbackStore : IExportCallbackStore
+public sealed class ExportCallbackStore
 {
     private readonly Db _db;
 
@@ -178,20 +163,20 @@ public sealed class KualiClient : IKualiClient
 
     private readonly HttpClient _http;
     private readonly IHttpClientFactory _httpFactory;
-    private readonly KualiOptions _options;
-    private readonly IExportCallbackStore _callbacks;
+    private readonly AppSettings.KualiSettings _options;
+    private readonly ExportCallbackStore _callbacks;
     private readonly ILogger<KualiClient> _log;
 
     public KualiClient(
         HttpClient http,
         IHttpClientFactory httpFactory,
-        IOptions<KualiOptions> options,
-        IExportCallbackStore callbacks,
+        IOptions<AppSettings> options,
+        ExportCallbackStore callbacks,
         ILogger<KualiClient> log)
     {
         _http = http;
         _httpFactory = httpFactory;
-        _options = options.Value;
+        _options = options.Value.Kuali;
         _callbacks = callbacks;
         _log = log;
 
@@ -319,7 +304,7 @@ public sealed class KualiClient : IKualiClient
     }
 
     // Callback URL HMAC signer. Inlined from the former KualiCallbackSigner
-    // so there's one callsite here and one in KualiCallbackController.
+    // so there's one callsite here and one in ApiController.
     internal static string SignCallback(string correlationId, string secret)
     {
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));

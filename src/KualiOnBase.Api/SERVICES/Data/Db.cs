@@ -10,9 +10,9 @@ public sealed class Db
 {
     private readonly string _connectionString;
 
-    public Db(IOptions<DatabaseOptions> options)
+    public Db(IOptions<AppSettings> options)
     {
-        var path = options.Value.Path;
+        var path = options.Value.Database.Path;
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 

@@ -365,9 +365,9 @@ To disable the page entirely in production: `Ui__Enabled=false`.
 
 ```
 src/KualiOnBase.Api/
-  CONTROLLERS/             HTTP endpoints only; thin route handlers
-  MODELS/                  Config option classes, startup validation, DTOs/rows
-  SERVICES/                Import workflow, Kuali client, job store, auth, email
+  CONTROLLERS/ApiController.cs  All HTTP endpoints; thin route handlers
+  MODELS/                  One AppSettings object plus simple DTOs/rows
+  SERVICES/                Import workflow, Kuali client, jobs, auth, email
   SERVICES/Data/Migrations Embedded SQLite migrations
   WWWROOT/index.html       Auditor / visualizer page (vanilla HTML/CSS/JS)
   Properties/launchSettings.json
@@ -418,7 +418,7 @@ Non-transient failures (`400` from Kuali, invalid target path, validation errors
 ### Two layers of retries, each for different failures
 
 - **Polly policy** on `HttpClient` — 3 attempts with exponential backoff **inside a single API call**, for transient HTTP errors against Kuali. Caller never sees the retry.
-- **JobStore + RetryWorker** — **across calls**, for any job that failed even after Polly gave up. Up to `MaxAttempts` with longer backoff. Survives a process restart.
+- **JobsService + RetryWorker** — **across calls**, for any job that failed even after Polly gave up. Up to `MaxAttempts` with longer backoff. Survives a process restart.
 
 ### SQLite + Dapper, not EF + Postgres
 

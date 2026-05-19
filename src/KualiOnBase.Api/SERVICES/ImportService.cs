@@ -26,23 +26,23 @@ public sealed class ImportService
     private readonly IKualiClient _kuali;
     private readonly BackupService _backup;
     private readonly JobEventLog _events;
-    private readonly ImportOptions _importOptions;
-    private readonly JobStore _queue;
+    private readonly AppSettings.ImportSettings _importOptions;
+    private readonly JobsService _jobs;
     private readonly ILogger<ImportService> _log;
 
     public ImportService(
         IKualiClient kuali,
         BackupService backup,
         JobEventLog events,
-        JobStore queue,
-        IOptions<ImportOptions> importOptions,
+        JobsService jobs,
+        IOptions<AppSettings> settings,
         ILogger<ImportService> log)
     {
         _kuali = kuali;
         _backup = backup;
         _events = events;
-        _queue = queue;
-        _importOptions = importOptions.Value;
+        _jobs = jobs;
+        _importOptions = settings.Value.Import;
         _log = log;
     }
 
@@ -72,7 +72,7 @@ public sealed class ImportService
             return DeferCleanup(delivery, readyAt, "Import succeeded; cleanup deferred during grace period.");
         }
 
-        if (await _queue.CleanupAlreadySucceededInWindowAsync(
+        if (await _jobs.CleanupAlreadySucceededInWindowAsync(
             job.DocumentId,
             job.CreatedAt,
             CleanupGracePeriod,
@@ -87,7 +87,7 @@ public sealed class ImportService
             return DeferCleanup(delivery, job.NextAttemptAt, "Import succeeded; cleanup still in grace period.");
         }
 
-        if (await _queue.IsSiblingStillImportingAsync(
+        if (await _jobs.IsSiblingStillImportingAsync(
             job.DocumentId,
             job.DownloadMode,
             job.CreatedAt,
@@ -100,7 +100,7 @@ public sealed class ImportService
                 "Cleanup is waiting for both pdf and attachments imports to complete.");
         }
 
-        var cleanup = await _queue.GetCleanupRequestInWindowAsync(
+        var cleanup = await _jobs.GetCleanupRequestInWindowAsync(
             job.DocumentId,
             job.CreatedAt,
             CleanupGracePeriod,
@@ -524,12 +524,12 @@ public sealed class BackupService
     // reset creation time on every touch, which would keep backups alive forever.
     private const string BackupNameTimestampFormat = "yyyyMMdd_HHmmss";
 
-    private readonly BackupOptions _options;
+    private readonly AppSettings.BackupSettings _options;
     private readonly ILogger<BackupService> _log;
 
-    public BackupService(IOptions<BackupOptions> options, ILogger<BackupService> log)
+    public BackupService(IOptions<AppSettings> options, ILogger<BackupService> log)
     {
-        _options = options.Value;
+        _options = options.Value.Backup;
         _log = log;
     }
 
@@ -605,7 +605,7 @@ public sealed class BackupService
         return true;
     }
 }
-public static class IndexFileBuilder
+internal static class IndexFileBuilder
 {
     public const string ExternalSourceLiteral = "KUALI BUILD";
 
@@ -654,7 +654,7 @@ public static class IndexFileBuilder
             : new string(value.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
 }
 
-public static class FileNameSanitizer
+internal static class FileNameSanitizer
 {
     private static readonly char[] Invalid =
         ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0', '\r', '\n', '\t'];

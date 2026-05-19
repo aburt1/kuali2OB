@@ -10,10 +10,10 @@ public sealed class ApiKeyMiddleware
     private readonly RequestDelegate _next;
     private readonly string _expected;
 
-    public ApiKeyMiddleware(RequestDelegate next, IOptions<AuthOptions> options)
+    public ApiKeyMiddleware(RequestDelegate next, IOptions<AppSettings> options)
     {
         _next = next;
-        _expected = options.Value.ApiKey ?? string.Empty;
+        _expected = options.Value.Auth.ApiKey ?? string.Empty;
     }
 
     public async Task Invoke(HttpContext context)

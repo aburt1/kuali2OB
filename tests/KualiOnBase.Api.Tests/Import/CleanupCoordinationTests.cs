@@ -127,31 +127,40 @@ public sealed class CleanupCoordinationTests
             Directory.CreateDirectory(TargetRoot);
             Directory.CreateDirectory(BackupRoot);
 
-            var dbOptions = Options.Create(new DatabaseOptions
+            var settings = Options.Create(new AppSettings
             {
-                Path = Path.Combine(_root, "test.db")
+                Database = new AppSettings.DatabaseSettings
+                {
+                    Path = Path.Combine(_root, "test.db")
+                },
+                Backup = new AppSettings.BackupSettings
+                {
+                    RootPath = BackupRoot
+                },
+                Import = new AppSettings.ImportSettings
+                {
+                    AllowedTargetRoots = TargetRoot
+                }
             });
 
-            Db = new Db(dbOptions);
+            Db = new Db(settings);
             Db.Migrate();
 
-            Queue = new JobStore(Db);
+            Queue = new JobsService(Db);
             Kuali = new FakeKualiClient();
             Import = new ImportService(
                 Kuali,
-                new BackupService(
-                    Options.Create(new BackupOptions { RootPath = BackupRoot }),
-                    NullLogger<BackupService>.Instance),
+                new BackupService(settings, NullLogger<BackupService>.Instance),
                 new JobEventLog(Db, NullLogger<JobEventLog>.Instance),
                 Queue,
-                Options.Create(new ImportOptions { AllowedTargetRoots = TargetRoot }),
+                settings,
                 NullLogger<ImportService>.Instance);
         }
 
         public string TargetRoot { get; }
         public string BackupRoot { get; }
         public Db Db { get; }
-        public JobStore Queue { get; }
+        public JobsService Queue { get; }
         public FakeKualiClient Kuali { get; }
         public ImportService Import { get; }
 

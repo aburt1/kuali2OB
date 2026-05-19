@@ -11,22 +11,42 @@ public sealed class KualiClientTests
     [Fact]
     public void ResolveDownloadUrl_RootRelativePath_UsesSameOriginWithAuth()
     {
+        var root = Path.Combine(Path.GetTempPath(), $"kuali2ob-kuali-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
         using var http = new HttpClient
         {
             BaseAddress = new Uri("https://kuali.example.edu/")
         };
 
-        var client = new KualiClient(
-            http,
-            new StubHttpClientFactory(),
-            Options.Create(new KualiOptions()),
-            new StubExportCallbackStore(),
-            NullLogger<KualiClient>.Instance);
+        try
+        {
+            var settings = Options.Create(new AppSettings
+            {
+                Database = new AppSettings.DatabaseSettings
+                {
+                    Path = Path.Combine(root, "test.db")
+                }
+            });
+            var db = new Db(settings);
+            db.Migrate();
 
-        var resolved = client.ResolveDownloadUrl("/files/123");
+            var client = new KualiClient(
+                http,
+                new StubHttpClientFactory(),
+                settings,
+                new ExportCallbackStore(db),
+                NullLogger<KualiClient>.Instance);
 
-        Assert.True(resolved.UseAuth);
-        Assert.Equal(new Uri("https://kuali.example.edu/files/123"), resolved.Uri);
+            var resolved = client.ResolveDownloadUrl("/files/123");
+
+            Assert.True(resolved.UseAuth);
+            Assert.Equal(new Uri("https://kuali.example.edu/files/123"), resolved.Uri);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     private sealed class StubHttpClientFactory : IHttpClientFactory
@@ -34,12 +54,4 @@ public sealed class KualiClientTests
         public HttpClient CreateClient(string name) => new();
     }
 
-    private sealed class StubExportCallbackStore : IExportCallbackStore
-    {
-        public Task CreatePendingAsync(string correlationId, string documentId, CancellationToken ct) => Task.CompletedTask;
-        public Task<ExportCallbackRow?> GetAsync(string correlationId, CancellationToken ct) => Task.FromResult<ExportCallbackRow?>(null);
-        public Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct) => Task.FromResult(false);
-        public Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct) => Task.FromResult(false);
-        public Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct) => Task.FromResult(0);
-    }
 }

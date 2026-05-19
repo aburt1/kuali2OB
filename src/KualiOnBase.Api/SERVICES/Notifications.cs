@@ -8,14 +8,14 @@ namespace KualiOnBase.Api.Services;
 
 public sealed class EmailNotificationService
 {
-    private readonly NotificationsOptions _options;
+    private readonly AppSettings.NotificationSettings _options;
     private readonly ILogger<EmailNotificationService> _log;
 
     public EmailNotificationService(
-        IOptions<NotificationsOptions> options,
+        IOptions<AppSettings> options,
         ILogger<EmailNotificationService> log)
     {
-        _options = options.Value;
+        _options = options.Value.Notifications;
         _log = log;
     }
 

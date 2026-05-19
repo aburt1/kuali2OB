@@ -5,7 +5,7 @@ using Xunit;
 
 namespace KualiOnBase.Api.Tests.Jobs;
 
-public sealed class JobsControllerTests
+public sealed class ApiControllerTests
 {
     [Fact]
     public void ParsePayload_SanitizesNestedArraysWithoutParentReuseErrors()
@@ -26,7 +26,7 @@ public sealed class JobsControllerTests
             }
             """;
 
-        var payload = JobsController.ParsePayload(json);
+        var payload = ApiController.ParsePayload(json);
 
         var serialized = JsonSerializer.Serialize(payload);
 

@@ -8,14 +8,14 @@ using Microsoft.Extensions.Options;
 
 namespace KualiOnBase.Api.Services;
 
-// All job persistence is here: insert/update jobs, find retry work, list
+// All job persistence and background job work is here: insert/update jobs, find retry work, list
 // dashboard rows, and answer the small cleanup-coordination questions. This is
-// intentionally one readable store instead of one repository class per query.
-public sealed class JobStore
+// intentionally one readable service instead of one repository class per query.
+public sealed class JobsService
 {
     private readonly Db _db;
 
-    public JobStore(Db db)
+    public JobsService(Db db)
     {
         _db = db;
     }
@@ -246,16 +246,16 @@ public sealed class JobStore
 public sealed class RetryWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopes;
-    private readonly RetryOptions _options;
+    private readonly AppSettings.RetrySettings _options;
     private readonly ILogger<RetryWorker> _log;
 
     public RetryWorker(
         IServiceScopeFactory scopes,
-        IOptions<RetryOptions> options,
+        IOptions<AppSettings> settings,
         ILogger<RetryWorker> log)
     {
         _scopes = scopes;
-        _options = options.Value;
+        _options = settings.Value.Retry;
         _log = log;
     }
 
@@ -291,21 +291,21 @@ public sealed class RetryWorker : BackgroundService
     private async Task ProcessDueJobsAsync(CancellationToken ct)
     {
         using var scope = _scopes.CreateScope();
-        var queue = scope.ServiceProvider.GetRequiredService<JobStore>();
+        var jobs = scope.ServiceProvider.GetRequiredService<JobsService>();
         var importService = scope.ServiceProvider.GetRequiredService<ImportService>();
         var notifications = scope.ServiceProvider.GetRequiredService<EmailNotificationService>();
 
-        var due = await queue.DueForRetryAsync(DateTime.UtcNow, ct);
+        var due = await jobs.DueForRetryAsync(DateTime.UtcNow, ct);
         foreach (var job in due)
         {
             if (ct.IsCancellationRequested) break;
-            await RunJobAsync(job, queue, importService, notifications, ct);
+            await RunJobAsync(job, jobs, importService, notifications, ct);
         }
     }
 
     private async Task RunJobAsync(
         ImportJob job,
-        JobStore queue,
+        JobsService jobs,
         ImportService importService,
         EmailNotificationService notifications,
         CancellationToken ct)
@@ -313,7 +313,7 @@ public sealed class RetryWorker : BackgroundService
         job.AttemptCount += 1;
         job.Status = JobStatus.Running;
         job.UpdatedAt = DateTime.UtcNow;
-        await queue.UpdateAsync(job, ct);
+        await jobs.UpdateAsync(job, ct);
 
         try
         {
@@ -326,7 +326,7 @@ public sealed class RetryWorker : BackgroundService
                 job.Status = JobStatus.Retrying;
                 job.LastError = result.CleanupMessage;
                 job.NextAttemptAt = result.ResumeAt ?? DateTime.UtcNow.Add(Backoff(job.AttemptCount));
-                await queue.UpdateAsync(job, ct);
+                await jobs.UpdateAsync(job, ct);
                 _log.LogInformation(
                     "Retry job {JobId} deferred cleanup; next check at {NextAttemptAt}",
                     job.Id, job.NextAttemptAt);
@@ -336,7 +336,7 @@ public sealed class RetryWorker : BackgroundService
             job.Status = JobStatus.Succeeded;
             job.LastError = null;
             job.NextAttemptAt = null;
-            await queue.UpdateAsync(job, ct);
+            await jobs.UpdateAsync(job, ct);
             _log.LogInformation("Retry job {JobId} succeeded on attempt {Attempt}", job.Id, job.AttemptCount);
         }
         catch (Exception ex)
@@ -360,7 +360,7 @@ public sealed class RetryWorker : BackgroundService
                     "Retry job {JobId} failed (attempt {Attempt}); next at {NextAttemptAt}",
                     job.Id, job.AttemptCount, job.NextAttemptAt);
             }
-            await queue.UpdateAsync(job, ct);
+            await jobs.UpdateAsync(job, ct);
 
             if (exhausted)
             {
@@ -379,19 +379,18 @@ public sealed class RetryWorker : BackgroundService
 public sealed class BackupCleanupWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopes;
-    private readonly BackupOptions _backup;
-    private readonly RetryOptions _retry;
+    private readonly AppSettings.BackupSettings _backup;
+    private readonly AppSettings.RetrySettings _retry;
     private readonly ILogger<BackupCleanupWorker> _log;
 
     public BackupCleanupWorker(
         IServiceScopeFactory scopes,
-        IOptions<BackupOptions> backup,
-        IOptions<RetryOptions> retry,
+        IOptions<AppSettings> settings,
         ILogger<BackupCleanupWorker> log)
     {
         _scopes = scopes;
-        _backup = backup.Value;
-        _retry = retry.Value;
+        _backup = settings.Value.Backup;
+        _retry = settings.Value.Retry;
         _log = log;
     }
 
@@ -434,8 +433,8 @@ public sealed class BackupCleanupWorker : BackgroundService
     {
         using var scope = _scopes.CreateScope();
         var backup = scope.ServiceProvider.GetRequiredService<BackupService>();
-        var queue = scope.ServiceProvider.GetRequiredService<JobStore>();
-        var callbacks = scope.ServiceProvider.GetRequiredService<IExportCallbackStore>();
+        var jobs = scope.ServiceProvider.GetRequiredService<JobsService>();
+        var callbacks = scope.ServiceProvider.GetRequiredService<ExportCallbackStore>();
         var db = scope.ServiceProvider.GetRequiredService<Db>();
 
         var backupCutoff = DateTime.UtcNow.AddDays(-Math.Max(0, _backup.RetentionDays));
@@ -445,7 +444,7 @@ public sealed class BackupCleanupWorker : BackgroundService
         if (_retry.SucceededJobRetentionDays > 0)
         {
             var jobCutoff = DateTime.UtcNow.AddDays(-_retry.SucceededJobRetentionDays);
-            prunedRows = await queue.DeleteSucceededOlderThanAsync(jobCutoff, ct);
+            prunedRows = await jobs.DeleteSucceededOlderThanAsync(jobCutoff, ct);
             if (prunedRows > 0)
             {
                 _log.LogInformation("Pruned {Count} succeeded ImportJobs older than {Cutoff:o}", prunedRows, jobCutoff);
