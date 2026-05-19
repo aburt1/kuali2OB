@@ -30,11 +30,11 @@ public sealed class JobsService
                 (DocumentId, OnBaseDocType, TargetFolderPath, DownloadMode,
                  DeleteAttachments, DeleteDocument, KeywordsJson, Status,
                  AttemptCount, NextAttemptAt, LastError, BackupFolderPath,
-                 ProducedFiles, CreatedAt, UpdatedAt)
+                 ProducedFiles, ResponseUrl, KualiNotifiedAt, CreatedAt, UpdatedAt)
             VALUES (@DocumentId, @OnBaseDocType, @TargetFolderPath, @DownloadMode,
                     @DeleteAttachments, @DeleteDocument, @KeywordsJson, @Status,
                     @AttemptCount, @NextAttemptAt, @LastError, @BackupFolderPath,
-                    @ProducedFiles, @CreatedAt, @UpdatedAt);
+                    @ProducedFiles, @ResponseUrl, @KualiNotifiedAt, @CreatedAt, @UpdatedAt);
             SELECT last_insert_rowid();
         """;
         job.Id = await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, job, cancellationToken: ct));
@@ -53,6 +53,7 @@ public sealed class JobsService
                 LastError         = @LastError,
                 BackupFolderPath  = @BackupFolderPath,
                 ProducedFiles     = @ProducedFiles,
+                KualiNotifiedAt   = @KualiNotifiedAt,
                 UpdatedAt         = @UpdatedAt
             WHERE Id = @Id;
         """;
@@ -72,7 +73,7 @@ public sealed class JobsService
         var rows = await conn.QueryAsync<ImportJob>(new CommandDefinition(
             """
             SELECT * FROM ImportJobs
-            WHERE Status = 'Retrying' AND NextAttemptAt <= @Now
+            WHERE Status IN ('Queued', 'Retrying') AND NextAttemptAt <= @Now
             ORDER BY NextAttemptAt
             LIMIT 25;
             """,
@@ -294,12 +295,13 @@ public sealed class RetryWorker : BackgroundService
         var jobs = scope.ServiceProvider.GetRequiredService<JobsService>();
         var importService = scope.ServiceProvider.GetRequiredService<ImportService>();
         var notifications = scope.ServiceProvider.GetRequiredService<EmailNotificationService>();
+        var kuali = scope.ServiceProvider.GetRequiredService<KualiResponseUrlNotifier>();
 
         var due = await jobs.DueForRetryAsync(DateTime.UtcNow, ct);
         foreach (var job in due)
         {
             if (ct.IsCancellationRequested) break;
-            await RunJobAsync(job, jobs, importService, notifications, ct);
+            await RunJobAsync(job, jobs, importService, notifications, kuali, ct);
         }
     }
 
@@ -308,6 +310,7 @@ public sealed class RetryWorker : BackgroundService
         JobsService jobs,
         ImportService importService,
         EmailNotificationService notifications,
+        KualiResponseUrlNotifier kuali,
         CancellationToken ct)
     {
         job.AttemptCount += 1;
@@ -320,6 +323,13 @@ public sealed class RetryWorker : BackgroundService
             var result = await importService.RunAsync(job, ct);
             job.BackupFolderPath = result.BackupFolder;
             job.ProducedFiles = JsonSerializer.Serialize(result.ProducedFiles);
+
+            // Delivery is "done" the moment files land in /target — whether or
+            // not the deleteDocument cleanup grace period has elapsed yet. Fire
+            // the workflow callback here so downstream Kuali steps don't wait
+            // an extra ~2 minutes for our internal cleanup. KualiNotifiedAt
+            // gates against double-firing on the cleanup retry.
+            await NotifyKualiOnceAsync(job, succeeded: true, error: null, jobs, kuali, ct);
 
             if (result.CleanupDeferred)
             {
@@ -364,9 +374,40 @@ public sealed class RetryWorker : BackgroundService
 
             if (exhausted)
             {
-                await notifications.NotifyJobFailedAsync(job, ct);
+                // When ResponseUrl is set, Kuali handles the failure email via
+                // the workflow integration step. Skip our SMTP path to avoid
+                // duplicate alerts. Fall back to email only when there's no
+                // workflow callback to honor (e.g. CLI/manual API callers).
+                var notified = await NotifyKualiOnceAsync(job, succeeded: false, ex.Message, jobs, kuali, ct);
+                if (!notified)
+                {
+                    await notifications.NotifyJobFailedAsync(job, ct);
+                }
             }
         }
+    }
+
+    // Returns true if the workflow callback POST succeeded (or was already sent
+    // earlier in this job's lifecycle). False means either no ResponseUrl was
+    // captured or the POST failed — in which case the caller decides whether to
+    // fall back to email and the next retry tick will try the callback again.
+    private static async Task<bool> NotifyKualiOnceAsync(
+        ImportJob job,
+        bool succeeded,
+        string? error,
+        JobsService jobs,
+        KualiResponseUrlNotifier kuali,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.ResponseUrl)) return false;
+        if (job.KualiNotifiedAt is not null) return true;
+
+        var ok = await kuali.NotifyAsync(job, succeeded, error, ct);
+        if (!ok) return false;
+
+        job.KualiNotifiedAt = DateTime.UtcNow;
+        await jobs.UpdateAsync(job, ct);
+        return true;
     }
 
     private TimeSpan Backoff(int attempt)

@@ -255,6 +255,8 @@
   .status.Failed::before { background: var(--red); }
   .status.Retrying { color: var(--amber); border-color: rgba(242,184,75,0.35); }
   .status.Retrying::before { background: var(--amber); }
+  .status.Queued { color: var(--amber); border-color: rgba(242,184,75,0.35); }
+  .status.Queued::before { background: var(--amber); }
   .status.Running { color: var(--blue); border-color: rgba(95,168,255,0.35); }
   .status.Running::before {
     background: var(--blue);
@@ -698,9 +700,10 @@
   }
 
   function renderSummary(jobs) {
-    const counts = { Succeeded: 0, Failed: 0, Retrying: 0, Running: 0 };
+    const counts = { Queued: 0, Succeeded: 0, Failed: 0, Retrying: 0, Running: 0 };
     for (const j of jobs) counts[j.status] = (counts[j.status] || 0) + 1;
     summaryEl.innerHTML = `
+      <span class="stat"><strong>${counts.Queued}</strong> queued</span>
       <span class="stat"><strong>${counts.Running}</strong> running</span>
       <span class="stat"><strong>${counts.Succeeded}</strong> ok</span>
       <span class="stat"><strong>${counts.Retrying}</strong> retry</span>

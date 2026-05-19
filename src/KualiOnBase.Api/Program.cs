@@ -50,6 +50,15 @@ builder.Services.AddHttpClient(KualiClient.DownloadHttpClientName, c =>
     c.Timeout = TimeSpan.FromMinutes(5);
 });
 
+// Outbound POST to Kuali's X-Response-URL when a job hits a terminal state.
+// Short timeout — these URLs go to Kuali Build's workflow runner which responds
+// fast; a hung Kuali side shouldn't block our worker loop from moving on.
+builder.Services.AddHttpClient(KualiResponseUrlNotifier.HttpClientName, c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddSingleton<KualiResponseUrlNotifier>();
+
 builder.Services.AddHostedService<RetryWorker>();
 builder.Services.AddHostedService<BackupCleanupWorker>();
 

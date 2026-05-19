@@ -18,12 +18,15 @@ public sealed class ImportJob
     public string? LastError { get; set; }
     public string? BackupFolderPath { get; set; }
     public string? ProducedFiles { get; set; }
+    public string? ResponseUrl { get; set; }
+    public DateTime? KualiNotifiedAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 
 public static class JobStatus
 {
+    public const string Queued = "Queued";
     public const string Running = "Running";
     public const string Succeeded = "Succeeded";
     public const string Failed = "Failed";

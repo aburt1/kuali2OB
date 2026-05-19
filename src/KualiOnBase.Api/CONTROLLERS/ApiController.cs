@@ -35,9 +35,6 @@ public static class ApiController
         [FromQuery] bool? deleteAttachments,
         [FromQuery] bool? deleteDocument,
         JobsService jobs,
-        ImportService importService,
-        EmailNotificationService notifications,
-        IOptions<AppSettings> settings,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -74,6 +71,19 @@ public static class ApiController
             documentId, onbaseDocType, downloadMode, deleteAttachments,
             deleteDocument, targetFolderPath, keywords.Count);
 
+        // Enqueue only — RetryWorker picks the job up on its next tick and
+        // runs ImportService inside its own scope. Returning 202 here means
+        // Kuali's HTTP Action sees an immediate ACK and never client-side-times-out
+        // waiting on the 180s Kuali export callback round-trip.
+        //
+        // Kuali Build's long-running-integration contract: when the workflow step
+        // calls us it sets X-Response-URL to a one-time callback URL. We POST to
+        // that URL when the job hits a terminal state; the workflow advances on
+        // a 2xx response and reads our X-Status-Code header for the final status.
+        var responseUrl = request.Headers["X-Response-URL"].ToString();
+        if (string.IsNullOrWhiteSpace(responseUrl)) responseUrl = null;
+
+        var now = DateTime.UtcNow;
         var job = new ImportJob
         {
             DocumentId = documentId!,
@@ -83,77 +93,18 @@ public static class ApiController
             DeleteAttachments = deleteAttachments ?? false,
             DeleteDocument = deleteDocument ?? false,
             KeywordsJson = JsonSerializer.Serialize(keywords),
-            Status = JobStatus.Running,
-            AttemptCount = 1,
+            Status = JobStatus.Queued,
+            AttemptCount = 0,
+            NextAttemptAt = now,
+            ResponseUrl = responseUrl,
         };
         await jobs.InsertAsync(job, ct);
 
-        try
-        {
-            var result = await importService.RunAsync(job, ct);
-            job.BackupFolderPath = result.BackupFolder;
-            job.ProducedFiles = JsonSerializer.Serialize(result.ProducedFiles);
-            job.LastError = result.CleanupMessage;
-
-            if (result.CleanupDeferred)
-            {
-                job.Status = JobStatus.Retrying;
-                job.NextAttemptAt = result.ResumeAt;
-                await jobs.UpdateAsync(job, ct);
-                return Results.Accepted(
-                    $"{ImportRoute}/{job.Id}",
-                    new ImportResponse(
-                        job.Id, job.Status, result.ProducedFiles, result.BackupFolder,
-                        job.AttemptCount, job.NextAttemptAt, result.CleanupMessage));
-            }
-
-            job.Status = JobStatus.Succeeded;
-            job.NextAttemptAt = null;
-            await jobs.UpdateAsync(job, ct);
-
-            return Results.Ok(new ImportResponse(
-                job.Id, job.Status, result.ProducedFiles, result.BackupFolder,
-                job.AttemptCount, null, null));
-        }
-        catch (Exception ex) when (IsTransient(ex))
-        {
-            var delay = TimeSpan.FromSeconds(settings.Value.Retry.BaseDelaySeconds);
-            job.Status = JobStatus.Retrying;
-            job.NextAttemptAt = DateTime.UtcNow.Add(delay);
-            job.LastError = ex.Message;
-            await jobs.UpdateAsync(job, ct);
-
-            log.LogWarning(ex,
-                "Import job {JobId} hit a transient error; scheduled retry at {NextAttemptAt}",
-                job.Id, job.NextAttemptAt);
-
-            return Results.Accepted(
-                $"{ImportRoute}/{job.Id}",
-                new ImportResponse(
-                    job.Id, job.Status, [], job.BackupFolderPath,
-                    job.AttemptCount, job.NextAttemptAt, ex.Message));
-        }
-        catch (ArgumentException ex)
-        {
-            // Caller-error (bad params) — no alert; operator already sees 400.
-            await MarkFailedAsync(jobs, job, ex, ct);
-            log.LogWarning(ex, "Import job {JobId} rejected (bad argument)", job.Id);
-            return TextError(400, ex.Message);
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            // Also caller-configurable (wrong path) — no alert.
-            await MarkFailedAsync(jobs, job, ex, ct);
-            log.LogWarning(ex, "Import job {JobId} rejected (target folder)", job.Id);
-            return TextError(400, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            await MarkFailedAsync(jobs, job, ex, ct);
-            log.LogError(ex, "Import job {JobId} failed permanently", job.Id);
-            await notifications.NotifyJobFailedAsync(job, ct);
-            return TextError(500, $"Import failed: {ex.Message}");
-        }
+        return Results.Accepted(
+            $"{ImportRoute}/{job.Id}",
+            new ImportResponse(
+                job.Id, job.Status, [], null,
+                job.AttemptCount, job.NextAttemptAt, null));
     }
 
     // Kuali's HTTP Action stringifies our response body as "[object Object]" when it's
@@ -161,32 +112,6 @@ public static class ApiController
     // which makes them readable in Kuali's "response data" dialog.
     private static IResult TextError(int status, string message) =>
         Results.Text(message, contentType: "text/plain; charset=utf-8", statusCode: status);
-
-    private static bool IsTransient(Exception ex) => ex switch
-    {
-        DirectoryNotFoundException => false,
-        FileNotFoundException => false,
-        PathTooLongException => false,
-        UnauthorizedAccessException => false,
-        HttpRequestException => true,
-        IOException => true,
-        TaskCanceledException => true,
-        KualiApiException kex when LooksTransient(kex.Message) => true,
-        _ => false,
-    };
-
-    private static bool LooksTransient(string message) =>
-        message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("503", StringComparison.Ordinal)
-        || message.Contains("502", StringComparison.Ordinal)
-        || message.Contains("504", StringComparison.Ordinal);
-
-    private static async Task MarkFailedAsync(JobsService jobs, ImportJob job, Exception ex, CancellationToken ct)
-    {
-        job.Status = JobStatus.Failed;
-        job.LastError = ex.Message;
-        await jobs.UpdateAsync(job, ct);
-    }
 
     internal static List<KeyValuePair<string, string>> ExtractKeywords(IQueryCollection query)
     {

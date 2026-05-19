@@ -509,3 +509,80 @@ public sealed class KualiApiException : Exception
     public KualiApiException(string message) : base(message) { }
     public KualiApiException(string message, Exception inner) : base(message, inner) { }
 }
+
+// Posts terminal job status back to the X-Response-URL Kuali handed us on the
+// initial integration request. Kuali advances the paused workflow step on any
+// 2xx from us; we set X-Status-Code so the workflow can branch on success/fail.
+// The X-Response-URL embeds a one-time token, so no Authorization header is sent.
+public sealed class KualiResponseUrlNotifier
+{
+    public const string HttpClientName = "KualiResponseUrl";
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly ILogger<KualiResponseUrlNotifier> _log;
+
+    public KualiResponseUrlNotifier(IHttpClientFactory httpFactory, ILogger<KualiResponseUrlNotifier> log)
+    {
+        _httpFactory = httpFactory;
+        _log = log;
+    }
+
+    public async Task<bool> NotifyAsync(ImportJob job, bool succeeded, string? error, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(job.ResponseUrl)) return false;
+
+        var producedFiles = string.IsNullOrWhiteSpace(job.ProducedFiles)
+            ? Array.Empty<string>()
+            : JsonSerializer.Deserialize<string[]>(job.ProducedFiles!, JsonOptions) ?? Array.Empty<string>();
+
+        var payload = succeeded
+            ? (object)new
+                {
+                    jobId = job.Id,
+                    status = JobStatus.Succeeded,
+                    documentId = job.DocumentId,
+                    producedFiles,
+                    backupFolder = job.BackupFolderPath,
+                }
+            : new
+                {
+                    jobId = job.Id,
+                    status = JobStatus.Failed,
+                    documentId = job.DocumentId,
+                    error = error ?? job.LastError ?? "unknown",
+                };
+
+        using var client = _httpFactory.CreateClient(HttpClientName);
+        using var content = JsonContent.Create(payload, options: JsonOptions);
+        using var req = new HttpRequestMessage(HttpMethod.Post, job.ResponseUrl) { Content = content };
+        // Kuali reads X-Status-Code to surface the actual outcome of the
+        // integration step; anything in 2xx-range advances the workflow.
+        req.Headers.TryAddWithoutValidation("X-Status-Code", succeeded ? "200" : "500");
+
+        try
+        {
+            using var resp = await client.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _log.LogWarning(
+                    "Kuali X-Response-URL POST for job {JobId} returned {Status}",
+                    job.Id, (int)resp.StatusCode);
+                return false;
+            }
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex,
+                "Kuali X-Response-URL POST for job {JobId} failed; will not stamp KualiNotifiedAt",
+                job.Id);
+            return false;
+        }
+    }
+}
