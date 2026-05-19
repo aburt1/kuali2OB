@@ -1,20 +1,62 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Dapper;
-using KualiOnBase.Api.Infrastructure.Data;
-using KualiOnBase.Api.Configuration;
-using KualiOnBase.Api.Features.Kuali;
+using KualiOnBase.Api.Services;
+using KualiOnBase.Api.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Features.Health;
+namespace KualiOnBase.Api.Controllers;
 
+public static partial class SystemController
+{
+    // /health        → liveness (process up)
+    // /health/ready  → DB connects + Backup:RootPath exists. ImportService does
+    //                  a write-probe per job, so we don't re-do it on every poll.
+    public static void MapHealth(IEndpointRouteBuilder app)
+    {
+        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+        app.MapGet("/health/ready", async (
+            Db db,
+            IOptions<BackupOptions> backupOpts,
+            ILoggerFactory lf,
+            CancellationToken ct) =>
+        {
+            var log = lf.CreateLogger("HealthReady");
+            var problems = new List<string>();
+
+            try
+            {
+                using var conn = db.Open();
+                await conn.ExecuteScalarAsync<long>(
+                    new CommandDefinition("SELECT 1;", cancellationToken: ct));
+            }
+            catch (Exception ex)
+            {
+                problems.Add("db: probe failed");
+                log.LogWarning(ex, "health/ready: DB probe failed");
+            }
+
+            var root = backupOpts.Value.RootPath;
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                problems.Add("backup: root missing");
+                log.LogWarning("health/ready: Backup:RootPath missing or not configured ({Root})", root);
+            }
+
+            return problems.Count == 0
+                ? Results.Ok(new { status = "ready" })
+                : Results.Json(new { status = "not_ready", problems }, statusCode: 503);
+        });
+    }
+}
 // Diagnostics: read-only introspection of DB persistence + an "I want to try
 // this exact options array against Kuali and see what comes back" probe.
 // The probe exists because Kuali's `options: [String!]!` is a plain string
 // array — the valid values aren't in the schema, they're defined server-side,
 // so finding what actually merges requires empirical testing.
-public static class DiagnosticEndpoint
+public static partial class SystemController
 {
     // Cap probe-export size hard so a single scripted call can't OOM the
     // container (Kuali exports can be hundreds of MB for long forms).

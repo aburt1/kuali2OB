@@ -1,8 +1,11 @@
 using System.Net.Mail;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Configuration;
+namespace KualiOnBase.Api.Models;
 
+// Keep configuration in one predictable file. These classes bind directly to
+// appsettings.json / environment variables, and StartupValidator gives operators
+// a clear failure before the app starts doing work with placeholder secrets.
 public sealed class AuthOptions
 {
     public const string SectionName = "Auth";

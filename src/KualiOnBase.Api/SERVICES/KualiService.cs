@@ -4,12 +4,168 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using KualiOnBase.Api.Features.Import;
-using KualiOnBase.Api.Features.Kuali;
-using KualiOnBase.Api.Configuration;
+using Dapper;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Features.Kuali;
+namespace KualiOnBase.Api.Services;
+
+// Kuali integration boundary. The public client methods are the only things the
+// import workflow needs to know about Kuali; GraphQL strings and callback polling
+// stay tucked in this file so the workflow reads like business logic.
+public interface IKualiClient
+{
+    Task<KualiDocument> GetDocumentAsync(string documentId, CancellationToken ct);
+
+    // `exportOptions` passes through to Kuali's `options: [String!]!`.
+    // Production callers send `["Combined"]`. The tenant setting "Include PDFs
+    // uploaded through the form" is what actually decides whether attachments
+    // get merged into the returned PDF — see README.
+    Task<string> ExportPdfAsync(string documentId, IReadOnlyList<string> exportOptions, CancellationToken ct);
+
+    Task DownloadToFileAsync(string url, string destinationPath, CancellationToken ct);
+
+    Task ClearAttachmentsAsync(string documentId, IReadOnlyList<string> fieldPaths, CancellationToken ct);
+
+    Task DeleteDocumentAsync(string documentId, CancellationToken ct);
+}
+
+public interface IExportCallbackStore
+{
+    Task CreatePendingAsync(string correlationId, string documentId, CancellationToken ct);
+    Task<ExportCallbackRow?> GetAsync(string correlationId, CancellationToken ct);
+
+    // Returns true iff the row transitioned from Pending to Completed. False means
+    // the row was already Completed/Failed — the caller lost the race (legitimate
+    // duplicate) or is an attacker trying to overwrite a finalized state.
+    Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct);
+    Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct);
+
+    Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct);
+}
+
+
+public sealed class ExportCallbackStore : IExportCallbackStore
+{
+    private readonly Db _db;
+
+    public ExportCallbackStore(Db db)
+    {
+        _db = db;
+    }
+
+    public async Task CreatePendingAsync(string correlationId, string documentId, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        var now = DateTime.UtcNow;
+        await conn.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO ExportCallbacks
+                (CorrelationId, DocumentId, Status, SignedUrl, ErrorMessage, CreatedAt, UpdatedAt)
+            VALUES (@CorrelationId, @DocumentId, 'Pending', NULL, NULL, @Now, @Now);
+            """,
+            new { CorrelationId = correlationId, DocumentId = documentId, Now = now },
+            cancellationToken: ct));
+    }
+
+    public async Task<ExportCallbackRow?> GetAsync(string correlationId, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        return await conn.QuerySingleOrDefaultAsync<ExportCallbackRow>(new CommandDefinition(
+            "SELECT * FROM ExportCallbacks WHERE CorrelationId = @Id;",
+            new { Id = correlationId },
+            cancellationToken: ct));
+    }
+
+    public async Task<bool> MarkCompletedAsync(string correlationId, string signedUrl, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        // WHERE Status='Pending' is the one-shot guard. If an attacker races to
+        // re-POST the callback after we (or they) already finalized it, affected==0
+        // and we surface a 409 to the caller without touching the row. Without this
+        // guard, any authenticated-by-HMAC caller can overwrite SignedUrl at will.
+        var affected = await conn.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE ExportCallbacks
+               SET Status = 'Completed', SignedUrl = @Url, UpdatedAt = @Now
+             WHERE CorrelationId = @Id AND Status = 'Pending';
+            """,
+            new { Id = correlationId, Url = signedUrl, Now = DateTime.UtcNow },
+            cancellationToken: ct));
+        return affected == 1;
+    }
+
+    public async Task<bool> MarkFailedAsync(string correlationId, string error, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        var affected = await conn.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE ExportCallbacks
+               SET Status = 'Failed', ErrorMessage = @Error, UpdatedAt = @Now
+             WHERE CorrelationId = @Id AND Status = 'Pending';
+            """,
+            new { Id = correlationId, Error = error, Now = DateTime.UtcNow },
+            cancellationToken: ct));
+        return affected == 1;
+    }
+
+    public async Task<int> DeleteOlderThanAsync(DateTime cutoffUtc, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        return await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM ExportCallbacks WHERE CreatedAt < @Cutoff;",
+            new { Cutoff = cutoffUtc },
+            cancellationToken: ct));
+    }
+}
+
+internal static class KualiGraphQl
+{
+    public const string GetDocument = """
+        query GetDocument($id: ID!) {
+          document(id: $id) {
+            id
+            meta
+            data
+          }
+        }
+        """;
+
+    // exportDocument is callback-based: Kuali POSTs the signed PDF URL to callbackUrl
+    // when rendering completes. Returns a job id string (not used further by us).
+    // `options` is required ([String!]!) by the schema; an empty list means "defaults".
+    public const string ExportDocument = """
+        mutation ExportDocument(
+          $id: ID!,
+          $callbackUrl: String!,
+          $options: [String!]!,
+          $sendAsPost: Boolean!,
+          $timeZone: String
+        ) {
+          exportDocument(
+            id: $id,
+            callbackUrl: $callbackUrl,
+            options: $options,
+            sendAsPost: $sendAsPost,
+            timeZone: $timeZone
+          )
+        }
+        """;
+
+    // UpdateDocumentInput = { id: ID, data: JSON, comment: String }
+    public const string UpdateDocument = """
+        mutation UpdateDocument($args: UpdateDocumentInput!) {
+          updateDocument(args: $args) { id }
+        }
+        """;
+
+    public const string DeleteDocument = """
+        mutation DeleteDocument($id: ID!) {
+          deleteDocument(id: $id)
+        }
+        """;
+}
 
 public sealed class KualiClient : IKualiClient
 {
@@ -163,7 +319,7 @@ public sealed class KualiClient : IKualiClient
     }
 
     // Callback URL HMAC signer. Inlined from the former KualiCallbackSigner
-    // so there's one callsite here and one in KualiExportCallbackEndpoint.
+    // so there's one callsite here and one in KualiCallbackController.
     internal static string SignCallback(string correlationId, string secret)
     {
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));

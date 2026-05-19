@@ -1,20 +1,16 @@
 using System.Threading.RateLimiting;
-using KualiOnBase.Api.Infrastructure.Auth;
-using KualiOnBase.Api.Features.Import;
-using KualiOnBase.Api.Infrastructure.Data;
-using KualiOnBase.Api.Features.Jobs;
-using KualiOnBase.Api.Features.Kuali;
-using KualiOnBase.Api.Features.Health;
-using KualiOnBase.Api.Configuration;
-using KualiOnBase.Api.Features.Notifications;
+using KualiOnBase.Api.Controllers;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.Extensions.FileProviders;
 using Polly;
 using Polly.Extensions.Http;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Program.cs is only startup wiring: config binding, dependency registration,
+// middleware, and route registration. The behavior stays in CONTROLLERS/SERVICES.
 builder.Host.UseSerilog((ctx, sp, lc) => lc
     .ReadFrom.Configuration(ctx.Configuration)
     .ReadFrom.Services(sp)
@@ -30,12 +26,12 @@ builder.Services.Configure<NotificationsOptions>(builder.Configuration.GetSectio
 builder.Services.Configure<ImportOptions>(builder.Configuration.GetSection(ImportOptions.SectionName));
 
 builder.Services.AddSingleton<Db>();
-builder.Services.AddScoped<RetryQueue>();
+builder.Services.AddScoped<JobStore>();
 builder.Services.AddScoped<BackupService>();
-builder.Services.AddScoped<ImportOrchestrator>();
+builder.Services.AddScoped<ImportService>();
 builder.Services.AddScoped<IExportCallbackStore, ExportCallbackStore>();
 builder.Services.AddScoped<JobEventLog>();
-builder.Services.AddSingleton<INotificationService, EmailNotificationService>();
+builder.Services.AddSingleton<EmailNotificationService>();
 
 // Explicit Timeout on the named HttpClient: covers SendAsync (connect + headers)
 // for GraphQL calls AND the ResponseHeadersRead phase of DownloadToFileAsync.
@@ -112,7 +108,7 @@ if (app.Environment.IsDevelopment())
 // Kuali's HTTP Action surfaces our response body as-is but stringifies JSON
 // as "[object Object]", so returning plain-text errors keeps operator feedback
 // readable in Kuali. This handler catches anything that escapes endpoint-level
-// try/catch (e.g. DB failures during retry-queue insert) and does the same.
+// try/catch (e.g. DB failures during job-store insert) and does the same.
 app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
@@ -137,10 +133,8 @@ app.UseSerilogRequestLogging();
 var uiEnabled = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<UiOptions>>().Value.Enabled;
 if (uiEnabled)
 {
-    var frontend = new PhysicalFileProvider(
-        Path.Combine(app.Environment.ContentRootPath, "Frontend"));
-    app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = frontend });
-    app.UseStaticFiles(new StaticFileOptions { FileProvider = frontend });
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
 }
 
 // Auth BEFORE rate-limit on purpose: the rate limiter partitions by bearer
@@ -151,17 +145,16 @@ if (uiEnabled)
 app.UseMiddleware<ApiKeyMiddleware>();
 app.UseRateLimiter();
 
-HealthEndpoint.Map(app);
-ImportEndpoint.Map(app).RequireRateLimiting(ImportRateLimiterPolicy);
-JobsEndpoint.Map(app);
-JobFilesEndpoint.Map(app);
-KualiExportCallbackEndpoint.Map(app);
+SystemController.MapHealth(app);
+ImportController.Map(app).RequireRateLimiting(ImportRateLimiterPolicy);
+JobsController.Map(app);
+KualiCallbackController.Map(app);
 // db-status is cheap and read-only; no rate-limit needed.
 // kuali-probe-export actually calls Kuali + writes to temp disk — partition it
 // with the same bucket as /api/kuali-onbase-import so an operator can't script
 // the probe endpoint to hammer their Kuali export quota.
-DiagnosticEndpoint.MapDbStatus(app);
-DiagnosticEndpoint.MapProbeExport(app).RequireRateLimiting(ImportRateLimiterPolicy);
+SystemController.MapDbStatus(app);
+SystemController.MapProbeExport(app).RequireRateLimiting(ImportRateLimiterPolicy);
 
 static IAsyncPolicy<HttpResponseMessage> GetKualiRetryPolicy()
 {

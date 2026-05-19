@@ -1,21 +1,22 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using KualiOnBase.Api.Features.Import;
-using KualiOnBase.Api.Features.Jobs;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 
-namespace KualiOnBase.Api.Features.Jobs;
+namespace KualiOnBase.Api.Controllers;
 
 // Dashboard-facing list of recent jobs. Bearer-gated by ApiKeyMiddleware.
 // We deliberately return only basenames for produced files and for the backup
 // folder — absolute paths never cross the API boundary. Downloads flow through
 // /api/jobs/{id}/files/{i}, which resolves paths server-side inside the stored
 // TargetFolderPath / BackupFolderPath.
-public static class JobsEndpoint
+public static partial class JobsController
 {
     public static RouteHandlerBuilder Map(IEndpointRouteBuilder app)
     {
+        MapFileDownload(app);
         return app.MapGet("/api/jobs", async (
-            RetryQueue queue,
+            JobStore queue,
             JobEventLog events,
             int? limit,
             CancellationToken ct) =>
@@ -144,4 +145,83 @@ public static class JobsEndpoint
     private static bool LooksLikeHttpUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    private static RouteHandlerBuilder MapFileDownload(IEndpointRouteBuilder app)
+    {
+        return app.MapGet("/api/jobs/{id:long}/files/{index:int}", Handle);
+    }
+
+    public static async Task<IResult> Handle(
+        long id,
+        int index,
+        JobStore queue,
+        CancellationToken ct)
+    {
+        var job = await queue.GetAsync(id, ct);
+        if (job is null)
+        {
+            return Results.NotFound();
+        }
+
+        var files = DecodeFiles(job.ProducedFiles);
+        if (index < 0 || index >= files.Count)
+        {
+            return Results.NotFound();
+        }
+
+        var candidate = files[index];
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(candidate);
+        }
+        catch
+        {
+            return Results.BadRequest();
+        }
+
+        // Containment check: the resolved file must sit inside the job's target
+        // folder OR the backup folder we recorded — reject anything else so this
+        // endpoint can't be used to read arbitrary files off disk.
+        if (!IsUnder(fullPath, job.TargetFolderPath)
+            && !(job.BackupFolderPath is { Length: > 0 } backup && IsUnder(fullPath, backup)))
+        {
+            return Results.NotFound();
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            return Results.NotFound();
+        }
+
+        var contentType = InferContentType(fullPath);
+        // No fileDownloadName → no Content-Disposition: attachment header, so
+        // the browser renders PDFs inline and shows .txt as plain text.
+        return Results.File(fullPath, contentType, enableRangeProcessing: true);
+    }
+
+    private static bool IsUnder(string fullPath, string folder)
+    {
+        string fullFolder;
+        try { fullFolder = Path.GetFullPath(folder); }
+        catch { return false; }
+
+        var folderWithSep = fullFolder.EndsWith(Path.DirectorySeparatorChar)
+            ? fullFolder
+            : fullFolder + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(folderWithSep, StringComparison.Ordinal);
+    }
+
+    private static string InferContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".pdf" => "application/pdf",
+        ".txt" => "text/plain; charset=utf-8",
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".tif" or ".tiff" => "image/tiff",
+        ".doc" => "application/msword",
+        ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _ => "application/octet-stream",
+    };
+
 }

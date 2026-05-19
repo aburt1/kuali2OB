@@ -18,11 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Backend/Infrastructure/Data/Migrations/*.sql" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Frontend/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="SERVICES/Data/Migrations/*.sql" />
   </ItemGroup>
 
   <ItemGroup>

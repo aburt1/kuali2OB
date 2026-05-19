@@ -1,14 +1,12 @@
 using System.Net;
 using System.Net.Mail;
 using System.Text;
-using KualiOnBase.Api.Features.Import;
-using KualiOnBase.Api.Features.Kuali;
-using KualiOnBase.Api.Configuration;
+using KualiOnBase.Api.Models;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Features.Notifications;
+namespace KualiOnBase.Api.Services;
 
-public sealed class EmailNotificationService : INotificationService
+public sealed class EmailNotificationService
 {
     private readonly NotificationsOptions _options;
     private readonly ILogger<EmailNotificationService> _log;

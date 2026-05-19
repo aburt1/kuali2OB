@@ -1,10 +1,11 @@
 using System.Text.Json;
-using KualiOnBase.Api.Features.Jobs;
+using KualiOnBase.Api.Controllers;
+using KualiOnBase.Api.Services;
 using Xunit;
 
 namespace KualiOnBase.Api.Tests.Jobs;
 
-public sealed class JobsEndpointTests
+public sealed class JobsControllerTests
 {
     [Fact]
     public void ParsePayload_SanitizesNestedArraysWithoutParentReuseErrors()
@@ -25,11 +26,11 @@ public sealed class JobsEndpointTests
             }
             """;
 
-        var payload = JobsEndpoint.ParsePayload(json);
+        var payload = JobsController.ParsePayload(json);
 
-        var exception = Record.Exception(() => JsonSerializer.Serialize(payload));
+        var serialized = JsonSerializer.Serialize(payload);
 
-        Assert.Null(exception);
+        Assert.NotEmpty(serialized);
         Assert.NotNull(payload);
         Assert.Equal("[redacted]", payload!["signedUrl"]!.GetValue<string>());
         Assert.Equal("[redacted]", payload["attachments"]![0]!["href"]!.GetValue<string>());

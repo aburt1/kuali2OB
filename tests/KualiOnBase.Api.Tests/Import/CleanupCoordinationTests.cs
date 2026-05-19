@@ -1,11 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Dapper;
-using KualiOnBase.Api.Configuration;
-using KualiOnBase.Api.Features.Import;
-using KualiOnBase.Api.Features.Jobs;
-using KualiOnBase.Api.Features.Kuali;
-using KualiOnBase.Api.Infrastructure.Data;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -23,7 +20,7 @@ public sealed class CleanupCoordinationTests
             deleteAttachments: true,
             deleteDocument: true);
 
-        var initial = await harness.Orchestrator.RunAsync(job, CancellationToken.None);
+        var initial = await harness.Import.RunAsync(job, CancellationToken.None);
         await harness.PersistDeferredAsync(job, initial);
 
         Assert.True(initial.CleanupDeferred);
@@ -33,7 +30,7 @@ public sealed class CleanupCoordinationTests
 
         harness.SetJobWindow(job, DateTime.UtcNow.AddMinutes(-3), DateTime.UtcNow.AddSeconds(-1));
 
-        var finalized = await harness.Orchestrator.RunAsync(job, CancellationToken.None);
+        var finalized = await harness.Import.RunAsync(job, CancellationToken.None);
         await harness.PersistSucceededAsync(job, finalized);
 
         Assert.False(finalized.CleanupDeferred);
@@ -60,10 +57,10 @@ public sealed class CleanupCoordinationTests
             deleteAttachments: false,
             deleteDocument: true);
 
-        var pdfInitial = await harness.Orchestrator.RunAsync(pdfJob, CancellationToken.None);
+        var pdfInitial = await harness.Import.RunAsync(pdfJob, CancellationToken.None);
         await harness.PersistDeferredAsync(pdfJob, pdfInitial);
 
-        var attachmentsInitial = await harness.Orchestrator.RunAsync(attachmentsJob, CancellationToken.None);
+        var attachmentsInitial = await harness.Import.RunAsync(attachmentsJob, CancellationToken.None);
         await harness.PersistDeferredAsync(attachmentsJob, attachmentsInitial);
 
         var requestedAt = DateTime.UtcNow.AddMinutes(-3);
@@ -71,14 +68,14 @@ public sealed class CleanupCoordinationTests
         harness.SetJobWindow(pdfJob, requestedAt, readyAt);
         harness.SetJobWindow(attachmentsJob, requestedAt.AddSeconds(10), readyAt);
 
-        var finalized = await harness.Orchestrator.RunAsync(attachmentsJob, CancellationToken.None);
+        var finalized = await harness.Import.RunAsync(attachmentsJob, CancellationToken.None);
         await harness.PersistSucceededAsync(attachmentsJob, finalized);
 
         Assert.False(finalized.CleanupDeferred);
         Assert.Equal(1, harness.Kuali.ClearAttachmentsCalls);
         Assert.Equal(1, harness.Kuali.DeleteDocumentCalls);
 
-        var secondFinalizer = await harness.Orchestrator.RunAsync(pdfJob, CancellationToken.None);
+        var secondFinalizer = await harness.Import.RunAsync(pdfJob, CancellationToken.None);
 
         Assert.False(secondFinalizer.CleanupDeferred);
         Assert.Equal(1, harness.Kuali.ClearAttachmentsCalls);
@@ -99,17 +96,17 @@ public sealed class CleanupCoordinationTests
             deleteAttachments: false,
             deleteDocument: false);
 
-        var pdfInitial = await harness.Orchestrator.RunAsync(pdfJob, CancellationToken.None);
+        var pdfInitial = await harness.Import.RunAsync(pdfJob, CancellationToken.None);
         await harness.PersistDeferredAsync(pdfJob, pdfInitial);
 
-        var attachmentsInitial = await harness.Orchestrator.RunAsync(attachmentsJob, CancellationToken.None);
+        var attachmentsInitial = await harness.Import.RunAsync(attachmentsJob, CancellationToken.None);
         await harness.PersistDeferredAsync(attachmentsJob, attachmentsInitial);
 
         var requestedAt = DateTime.UtcNow.AddMinutes(-4);
         harness.SetJobWindow(pdfJob, requestedAt, DateTime.UtcNow.AddSeconds(-1));
         harness.SetJobWindow(attachmentsJob, requestedAt.AddMinutes(3), DateTime.UtcNow.AddSeconds(-1));
 
-        var finalized = await harness.Orchestrator.RunAsync(pdfJob, CancellationToken.None);
+        var finalized = await harness.Import.RunAsync(pdfJob, CancellationToken.None);
 
         Assert.False(finalized.CleanupDeferred);
         Assert.Equal(1, harness.Kuali.ClearAttachmentsCalls);
@@ -138,9 +135,9 @@ public sealed class CleanupCoordinationTests
             Db = new Db(dbOptions);
             Db.Migrate();
 
-            Queue = new RetryQueue(Db);
+            Queue = new JobStore(Db);
             Kuali = new FakeKualiClient();
-            Orchestrator = new ImportOrchestrator(
+            Import = new ImportService(
                 Kuali,
                 new BackupService(
                     Options.Create(new BackupOptions { RootPath = BackupRoot }),
@@ -148,15 +145,15 @@ public sealed class CleanupCoordinationTests
                 new JobEventLog(Db, NullLogger<JobEventLog>.Instance),
                 Queue,
                 Options.Create(new ImportOptions { AllowedTargetRoots = TargetRoot }),
-                NullLogger<ImportOrchestrator>.Instance);
+                NullLogger<ImportService>.Instance);
         }
 
         public string TargetRoot { get; }
         public string BackupRoot { get; }
         public Db Db { get; }
-        public RetryQueue Queue { get; }
+        public JobStore Queue { get; }
         public FakeKualiClient Kuali { get; }
-        public ImportOrchestrator Orchestrator { get; }
+        public ImportService Import { get; }
 
         public async Task<ImportJob> CreateJobAsync(
             string downloadMode,
@@ -183,7 +180,7 @@ public sealed class CleanupCoordinationTests
             return job;
         }
 
-        public async Task PersistDeferredAsync(ImportJob job, ImportOrchestratorResult result)
+        public async Task PersistDeferredAsync(ImportJob job, ImportResult result)
         {
             job.BackupFolderPath = result.BackupFolder;
             job.ProducedFiles = JsonSerializer.Serialize(result.ProducedFiles);
@@ -193,7 +190,7 @@ public sealed class CleanupCoordinationTests
             await Queue.UpdateAsync(job, CancellationToken.None);
         }
 
-        public async Task PersistSucceededAsync(ImportJob job, ImportOrchestratorResult result)
+        public async Task PersistSucceededAsync(ImportJob job, ImportResult result)
         {
             job.BackupFolderPath = result.BackupFolder;
             job.ProducedFiles = JsonSerializer.Serialize(result.ProducedFiles);

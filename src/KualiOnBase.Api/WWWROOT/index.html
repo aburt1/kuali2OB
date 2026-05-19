@@ -783,7 +783,7 @@
   }
 
   function renderDetail(j) {
-    // Server returns basenames only (see JobsEndpoint) — no absolute paths
+    // Server returns basenames only (see JobsController) — no absolute paths
     // are exposed to the dashboard; downloads are looked up by index.
     const filesList = j.files.length
       ? `<ul>${j.files.map((f, i) => {

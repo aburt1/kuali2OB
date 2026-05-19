@@ -1,17 +1,17 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
-using KualiOnBase.Api.Configuration;
-using KualiOnBase.Api.Features.Kuali;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Features.Kuali;
+namespace KualiOnBase.Api.Controllers;
 
 // Kuali POSTs here when exportDocument finishes. Lives OUTSIDE /api so the
 // ApiKeyMiddleware doesn't block Kuali (Kuali has no API key); auth is the HMAC
 // signature on correlationId. Defense in depth: body-size cap, URL scheme check
 // (blocks SSRF through us into Kuali), one-shot status transition in the store.
-public static class KualiExportCallbackEndpoint
+public static class KualiCallbackController
 {
     public const string Route = "/kuali-export-callback/{correlationId}";
 

@@ -1,5 +1,5 @@
-using KualiOnBase.Api.Configuration;
-using KualiOnBase.Api.Features.Kuali;
+using KualiOnBase.Api.Models;
+using KualiOnBase.Api.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;

@@ -1,7 +1,7 @@
-using KualiOnBase.Api.Configuration;
+using KualiOnBase.Api.Models;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Infrastructure.Auth;
+namespace KualiOnBase.Api.Services;
 
 public sealed class ApiKeyMiddleware
 {

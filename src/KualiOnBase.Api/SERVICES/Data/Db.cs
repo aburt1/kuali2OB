@@ -1,10 +1,10 @@
 using System.Reflection;
 using Dapper;
-using KualiOnBase.Api.Configuration;
+using KualiOnBase.Api.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
-namespace KualiOnBase.Api.Infrastructure.Data;
+namespace KualiOnBase.Api.Services;
 
 public sealed class Db
 {
