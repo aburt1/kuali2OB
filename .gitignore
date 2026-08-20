@@ -40,9 +40,6 @@ appsettings.Local.json
 # Claude local settings (contains per-user permission allowlist)
 .claude/settings.local.json
 
-# Probe output — regenerate when needed, don't commit
-tools/kuali-schema-dump.json
-
 # Test output
 TestResults/
 coverage/
@@ -50,3 +47,22 @@ coverage/
 
 # AI assistant artifacts
 context-snapshot.json
+
+# ---------------------------------------------------------------------------
+# THIS REPOSITORY IS PUBLIC. Nothing below may be committed — it names internal
+# infrastructure (server hostnames, internal IPs, UNC shares, service accounts,
+# app pool names) which is exactly the reconnaissance an attacker would want.
+# Deployment docs that must be shared internally belong on the team wiki, not here.
+# ---------------------------------------------------------------------------
+
+# Publish output / deployment payloads (also contain a generated web.config)
+publish/
+kuali2ob-iis-publish/
+*.zip
+
+# Internal team wiki — not ours to publish
+EApps-Wiki/
+
+# Site-specific operational docs: real hostnames, IPs, shares, accounts.
+# Operational scripts live outside the repo entirely (~/Desktop/kuali2ob-tools).
+DEPLOY-IIS.md
