@@ -91,7 +91,8 @@ public sealed class Db
         var jobCount = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM ImportJobs;");
         log?.LogInformation(
             "SQLite DB at {Path} — preExisted={PreExisted}, preSizeBytes={PreSize}, jobRowCount={JobCount}. " +
-            "If preExisted is False on every redeploy, the /data volume is not persistent (configure Coolify persistent volume or use docker-compose).",
+            "If preExisted is False on every redeploy, Database:Path is pointing inside the deployment " +
+            "folder and is being overwritten — point it at a directory outside the site root.",
             full, preExisted, preSize, jobCount);
     }
 
