@@ -193,7 +193,7 @@ In the Kuali Build form/workflow editor, add an **HTTP Action** step to the appr
 
 For PDF export, Kuali renders asynchronously and calls *back* to this API when the signed URL is ready. You must:
 
-1. Set `Kuali:PublicBaseUrl` to a URL Kuali can reach (e.g. your public Docker host name).
+1. Set `Kuali:PublicBaseUrl` to a URL Kuali can reach — the public HTTPS URL of the site, including the path prefix if the app is hosted as an IIS sub-application.
 2. The API exposes `POST /kuali-export-callback/{correlationId}?sig=...` — signed with HMAC-SHA256 of `Kuali:CallbackSecret`. No API key required (Kuali doesn't know it); the HMAC signature is the auth.
 
 When Kuali POSTs back with the signed S3 URL, the API picks it up, downloads the PDF, and continues.
@@ -206,7 +206,8 @@ All settings bind from either `appsettings.json` or environment variables. **In 
 
 | Env var | `appsettings` path | Default | Purpose |
 |---|---|---|---|
-| `Auth__ApiKey` | `Auth:ApiKey` | `CHANGEME` | Required header for every `/api/*` request |
+| `Auth__ApiKey` | `Auth:ApiKey` | `CHANGEME` | Operator credential. Opens every `/api/*` route, including the dashboard's read and replay actions. |
+| `Auth__ImportApiKey` | `Auth:ImportApiKey` | *empty* | **Optional, recommended.** A second credential accepted **only** on `POST /api/kuali-onbase-import`. Give this one to Kuali Build's HTTP Action instead of `Auth__ApiKey`, so the key stored in Kuali — visible to any Kuali app administrator — cannot read stored job payloads or download documents. Leave empty to keep single-key behaviour. |
 | `Kuali__BaseUrl` | `Kuali:BaseUrl` | `https://csub.kualibuild.com` | Kuali tenant root |
 | `Kuali__ApiToken` | `Kuali:ApiToken` | `CHANGEME` | Kuali API token (Bearer) for GraphQL |
 | `Kuali__PublicBaseUrl` | `Kuali:PublicBaseUrl` | *empty* | Public URL Kuali callbacks reach (e.g. `https://kuali2ob.your-public-host`) |
@@ -234,36 +235,9 @@ All settings bind from either `appsettings.json` or environment variables. **In 
 
 ---
 
-## Deployment — Docker
+## Deployment — IIS (Windows Server)
 
-Multi-stage `Dockerfile` is at the repo root. Build & run:
-
-```bash
-docker build -t kuali2ob .
-docker run -d \
-  -p 8080:8080 \
-  -v /srv/kuali2ob/data:/data \
-  -v /srv/kuali2ob/backup:/backup \
-  -v /mnt/onbase-drop:/target \
-  -e Auth__ApiKey="..." \
-  -e Kuali__ApiToken="..." \
-  -e Kuali__PublicBaseUrl="https://kuali2ob.your-host" \
-  -e Kuali__CallbackSecret="..." \
-  -e Backup__RootPath=/backup \
-  kuali2ob
-```
-
-Run notes:
-
-1. Mount `/data` for SQLite persistence.
-2. Mount `/backup` for dated backup copies.
-3. Mount your OnBase drop location and make sure it is included under `Import__AllowedTargetRoots`.
-4. Provide the required env vars at container start.
-5. Expose the container behind a public hostname and use that hostname as `Kuali__PublicBaseUrl`.
-
-### Deployment — IIS (Windows Server)
-
-This app can also run behind IIS using the ASP.NET Core Module.
+The app is hosted by IIS through the ASP.NET Core Module.
 
 1. Install prerequisites on the IIS server:
    - IIS with the `Web Server` role
@@ -331,7 +305,7 @@ IIS-specific notes:
 
 ## Operations
 
-**Health checks.** Point Docker health checks, your reverse proxy, or any orchestrator at these:
+**Health checks.** Point your monitoring at these:
 
 | Endpoint | Purpose | Codes |
 |---|---|---|
@@ -369,10 +343,89 @@ src/KualiOnBase.Api/
   MODELS/                  One AppSettings object plus simple DTOs/rows
   SERVICES/                Import workflow, Kuali client, jobs, auth, email
   SERVICES/Data/Migrations Embedded SQLite migrations
-  WWWROOT/index.html       Auditor / visualizer page (vanilla HTML/CSS/JS)
+  wwwroot/index.html       Auditor / visualizer page (vanilla HTML/CSS/JS)
   Properties/launchSettings.json
-tools/probe-kuali-schema.sh  One-shot GraphQL introspection against your tenant
+tests/KualiOnBase.Api.Tests/  xunit suite; no external dependencies
 ```
+
+---
+
+## Input validation & injection defenses
+
+This service sits between a form product any staff member can submit to and a
+document repository, so it treats **every value that arrives with a request as
+hostile** — including values that reached it by way of Kuali, such as uploaded
+attachment filenames and form field contents.
+
+### Trust boundary
+
+Untrusted input reaches this service from five directions: the workflow's
+query-string parameters (document id, document type, target folder, download mode,
+delete flags, and up to twenty keyword key/value pairs, some of which are wired to
+user-filled form fields); the Kuali API response, whose document tree contains
+submitter-supplied content and uploaded filenames; the asynchronous export callback;
+request headers, notably the response-callback header; and the operator dashboard.
+
+### Controls by injection class
+
+| Class | Control |
+|---|---|
+| **SQL injection** | Every statement executed while serving a request is a fixed string literal in source, with all values passed as bound parameters via Dapper. No variable ever supplies a table name, column name, `ORDER BY` clause, or row limit as SQL *text* — the one caller-influenced row limit is a bound, clamped parameter, and the one `IN`-list is expanded by the data-access library into numbered placeholders whose count, never whose contents, shapes the statement. Schema migrations are compiled into the assembly and applied once at startup, before any route is reachable. No stored value is ever read back out and spliced into a query. |
+| **Path traversal / arbitrary file write** | Write destinations are canonicalised and then prefix-matched against a server-configured allowlist, with a trailing separator on both sides so a sibling directory cannot match. The check runs at the endpoint and again inside the background worker before any filesystem call. An unset allowlist rejects every request, and the service refuses to start without one. The service never creates the destination directory, so no request can bring a new location into existence. Filenames written to the repository are constructed server-side from the validated document id; only a sanitized file extension is carried over from the uploaded file, and the submitter's filename is never used as a path component. |
+| **Index-file / format injection** | Values written into the repository index file are stripped of all control characters plus the Unicode line separators, so no value can open an additional record. Keyword names are rejected if they collide with a reserved index directive or contain the directive separator, so a caller cannot forge a directive that changes how a document is filed. |
+| **Cross-site scripting** | The operator dashboard renders every value that can carry an HTML metacharacter — document type, target path, keyword names and values, filenames, event messages, error text, and the raw payload viewer — through a single escaping helper, at every call site, into either a text node or a quoted attribute. |
+| **Server-side request forgery** | Both outbound sinks — document downloads and the response callback — share one guard requiring an absolute HTTPS URL and rejecting loopback, link-local, private, and cloud-metadata addresses. A download URL that resolves off the configured Kuali origin is refused outright, and the API credential is attached only to requests that stay on that origin, so no supplied value can redirect a credentialed request elsewhere. |
+| **Log injection** | Logging is structured throughout, and untrusted values echoed into messages are flattened and length-capped, so a submitted value cannot forge a log line. |
+| **Command / LDAP / XPath injection, XXE, unsafe deserialization** | Not applicable: the service starts no processes and invokes no shell, queries no directory service, parses no XML, and deserializes JSON only into fixed types with the framework defaults. |
+
+### Request validation
+
+Every parameter is validated **before a job is created**, and all violations are
+returned together in a single response so an operator sees the complete picture
+rather than discovering problems one retry at a time. Unrecognised parameter names
+are rejected rather than ignored, so a misspelled parameter fails loudly instead of
+silently not applying. The document id must match a strict, fully anchored format;
+the download mode must be one of two literals; boolean flags are strictly parsed
+rather than defaulting when malformed; keyword slots must be complete pairs; and
+unresolved workflow template tokens are detected and rejected before they can be
+written into a repository index file. Validation failures are terminal — they are
+not retried, because a malformed request cannot become valid on a later attempt.
+
+### Authentication and rate limiting
+
+All `/api/*` routes require a bearer credential, compared in constant time. The
+export callback route sits outside that prefix by necessity — the sending system
+does not hold the credential — and is instead authenticated by an HMAC signature
+and accepted only once per correlation id. Import requests are rate-limited per
+credential.
+
+### Known advisory (accepted, with rationale)
+
+A dependency scan reports a High-severity advisory against the bundled native SQLite
+engine (`SQLitePCLRaw.lib.e_sqlite3`, GHSA-2m69-gcr7-jv3q). **There is currently no
+patched release** — the advisory affects every published version, and the dependency
+is pinned to the newest one available.
+
+The advisory describes memory corruption reachable through crafted SQL where the
+number of aggregate terms exceeds the available columns. This service executes no
+caller-supplied SQL: every statement is a fixed literal in source with values bound
+as parameters, so there is no path by which a request can influence the SQL text the
+engine parses. The condition the advisory describes is therefore not reachable here.
+
+This is re-checked whenever dependencies are updated, and the pin should be moved
+forward as soon as a patched release exists.
+
+### Verification
+
+These controls are covered by the automated test suite, which includes adversarial
+cases for each class above — traversal sequences, forged index directives, Unicode
+line separators, credential-redirecting download URLs, internal-address callbacks,
+and log-forging input. Run `dotnet test` to execute them.
+
+> Deployment-specific hardening (network exposure, host and share permissions,
+> credential storage, and monitoring) is documented separately in the internal
+> deployment runbook rather than here, since it describes a particular
+> installation rather than this software.
 
 ---
 
