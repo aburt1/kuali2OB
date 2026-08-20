@@ -16,6 +16,12 @@ builder.Host.UseSerilog((ctx, sp, lc) => lc
     .ReadFrom.Services(sp)
     .Enrich.FromLogContext());
 
+// Secret source is resolved before AppSettings binds, so a value fetched from a
+// vault is indistinguishable from one set in web.config. Defaults to Environment
+// (i.e. no vault) — see "Adding a secret provider" in DEVELOPER-GUIDE.md.
+var secretProvider = SecretConfigurationExtensions.ResolveSecretProvider(builder.Configuration);
+builder.Configuration.AddSecretProvider(secretProvider);
+
 builder.Services.Configure<AppSettings>(builder.Configuration);
 
 builder.Services.AddSingleton<Db>();
@@ -96,9 +102,10 @@ var app = builder.Build();
 
 var settings = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppSettings>>().Value;
 
-StartupValidator.ValidateOrThrow(
-    settings,
-    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup"));
+var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+startupLogger.LogInformation("Secret provider: {Provider}", secretProvider.Name);
+
+StartupValidator.ValidateOrThrow(settings, startupLogger);
 
 app.Services.GetRequiredService<Db>().Migrate(
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Db"));
@@ -131,6 +138,10 @@ app.UseExceptionHandler(errorApp =>
             $"Internal error: {ex?.Message ?? "unknown"}");
     });
 });
+
+// Before everything else so the headers are present on error responses and static
+// files alike. Scope caveat is documented on the middleware itself.
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 app.UseSerilogRequestLogging();
 

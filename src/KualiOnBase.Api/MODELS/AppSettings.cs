@@ -14,10 +14,21 @@ public sealed class AppSettings
     public UiSettings Ui { get; set; } = new();
     public NotificationSettings Notifications { get; set; } = new();
     public ImportSettings Import { get; set; } = new();
+    public SecretsSettings Secrets { get; set; } = new();
 
     public sealed class AuthSettings
     {
+        // Operator credential. Full access to every /api route, including replay.
+        // Lives in the dashboard's session storage on a VPN-only origin.
         public string ApiKey { get; set; } = string.Empty;
+
+        // Optional second credential handed to Kuali Build's HTTP Action. When set,
+        // it is accepted ONLY on the import endpoint — it cannot read stored job
+        // payloads, download documents, or hit diagnostics. This matters because the
+        // key pasted into Kuali is visible to any Kuali app administrator, so it
+        // should not also be a key to the confidential document history.
+        // Leave empty to keep the previous single-key behaviour.
+        public string ImportApiKey { get; set; } = string.Empty;
     }
 
     public sealed class BackupSettings
@@ -81,11 +92,27 @@ public sealed class AppSettings
         public int BaseDelaySeconds { get; set; } = 60;
         public int PollIntervalSeconds { get; set; } = 30;
         public int SucceededJobRetentionDays { get; set; } = 30;
+
+        // Failed jobs used to be kept forever, so their DocumentFetched payloads —
+        // which carry the full Kuali form data — accumulated indefinitely. Terminal
+        // failures age out on the same 30-day clock as everything else (backups,
+        // succeeded jobs), which keeps recent failures around for troubleshooting
+        // while bounding how long confidential form data lives anywhere on the box.
+        // Set to 0 to disable pruning. Only 'Failed' is touched; Queued/Retrying
+        // jobs are still in flight and are never deleted.
+        public int FailedJobRetentionDays { get; set; } = 30;
     }
 
     public sealed class UiSettings
     {
         public bool Enabled { get; set; } = true;
+    }
+
+    public sealed class SecretsSettings
+    {
+        // "Environment" (default) reads secrets from environment variables /
+        // web.config. A vault implementation registers its own name here.
+        public string Provider { get; set; } = "Environment";
     }
 }
 

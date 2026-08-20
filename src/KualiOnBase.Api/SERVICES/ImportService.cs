@@ -115,7 +115,7 @@ public sealed class ImportService
     {
         if (mode != "pdf" && mode != "attachments")
         {
-            throw new ArgumentException($"Invalid downloadMode '{mode}'. Expected pdf|attachments.");
+            throw new PermanentImportException($"Invalid downloadMode '{mode}'. Expected pdf|attachments.");
         }
     }
 
@@ -308,7 +308,10 @@ public sealed class ImportService
             new { HasSignedUrl = !string.IsNullOrWhiteSpace(url) },
             ct);
 
-        var pdfPath = Path.Combine(tempRoot, $"export-{document.Id}.pdf");
+        // job.DocumentId is the validated 24-hex id; document.Id comes back from the
+        // Kuali response and is not validated, so it must not reach a path. Sanitized
+        // as well, so a hand-inserted job row cannot escape tempRoot either.
+        var pdfPath = Path.Combine(tempRoot, $"export-{FileNameSanitizer.Sanitize(job.DocumentId)}.pdf");
         await _kuali.DownloadToFileAsync(url, pdfPath, ct);
         var size = new FileInfo(pdfPath).Length;
 
@@ -461,47 +464,14 @@ public sealed class ImportService
     private static bool IsCleanupRequested(ImportJob job) =>
         job.DeleteAttachments || job.DeleteDocument;
 
+    // Defence in depth: HandleImport rejects a bad path before queueing, but a
+    // replayed or hand-inserted job still gets checked here. Both call the same
+    // helper so the endpoint and the runner can never disagree about what's allowed.
     private void ValidateTargetPath(string requested)
     {
-        if (string.IsNullOrWhiteSpace(requested))
-        {
-            throw new ArgumentException("targetFolderPath is required.", nameof(requested));
-        }
-
-        var roots = _importOptions.ParseAllowedRoots();
-        if (roots.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Import:AllowedTargetRoots is not configured; refusing to write to any targetFolderPath.");
-        }
-
-        string canonical;
-        try
-        {
-            canonical = Path.GetFullPath(requested);
-        }
-        catch (Exception ex)
-        {
-            throw new ArgumentException(
-                $"targetFolderPath '{requested}' is not a valid path: {ex.Message}", nameof(requested), ex);
-        }
-
-        // OnBase SMB shares are case-insensitive on Windows hosts.
-        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-        foreach (var root in roots)
-        {
-            // Trailing separator on both sides so `/allowed` doesn't accept `/allowed-sibling`.
-            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                + Path.DirectorySeparatorChar;
-            var normalizedPath = canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                + Path.DirectorySeparatorChar;
-            if (normalizedPath.StartsWith(normalizedRoot, cmp)) return;
-        }
-
-        throw new ArgumentException(
-            $"targetFolderPath '{requested}' is not under any configured Import:AllowedTargetRoots.",
-            nameof(requested));
+        var problem = ImportRequestValidator.DescribeTargetPathProblem(
+            requested, _importOptions.ParseAllowedRoots());
+        if (problem is not null) throw new PermanentImportException(problem);
     }
 
     private sealed record KeywordDto(string Key, string Value);
@@ -648,10 +618,14 @@ internal static class IndexFileBuilder
         return sb.ToString();
     }
 
+    // char.IsControl misses U+2028/U+2029, which many readers still treat as line
+    // breaks — enough to open an extra record in the DIP index. Replaced explicitly.
     internal static string StripLineBreaks(string? value) =>
         string.IsNullOrEmpty(value)
             ? string.Empty
-            : new string(value.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+            : new string(value
+                .Select(c => char.IsControl(c) || c == '\u2028' || c == '\u2029' ? ' ' : c)
+                .ToArray()).Trim();
 }
 
 internal static class FileNameSanitizer

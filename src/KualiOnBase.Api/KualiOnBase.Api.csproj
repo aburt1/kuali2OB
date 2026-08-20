@@ -11,6 +11,13 @@
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.25" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- Direct pin: Microsoft.Data.Sqlite 8.0.10 resolves SQLitePCLRaw 2.1.6, which
+         carries a High-severity advisory (GHSA-2m69-gcr7-jv3q) in the bundled native
+         SQLite engine. 2.1.11 is the newest release; the advisory currently lists no
+         patched version, so this pin takes the latest native engine available rather
+         than clearing the finding. See the README security notes for why the
+         advisory is not reachable in this application. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="8.0.10" />
     <PackageReference Include="Polly" Version="8.4.2" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />

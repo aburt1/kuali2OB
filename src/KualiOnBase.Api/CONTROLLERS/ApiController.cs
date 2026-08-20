@@ -28,38 +28,35 @@ public static class ApiController
 
     public static async Task<IResult> HandleImport(
         HttpRequest request,
-        [FromQuery] string? documentId,
-        [FromQuery] string? onbaseDocType,
-        [FromQuery] string? targetFolderPath,
-        [FromQuery] string? downloadMode,
-        [FromQuery] bool? deleteAttachments,
-        [FromQuery] bool? deleteDocument,
         JobsService jobs,
+        IOptions<AppSettings> settings,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var log = loggerFactory.CreateLogger("ApiController.Import");
 
-        var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(documentId)) errors.Add("documentId is required.");
-        if (string.IsNullOrWhiteSpace(onbaseDocType)) errors.Add("onbaseDocType is required.");
-        if (string.IsNullOrWhiteSpace(targetFolderPath)) errors.Add("targetFolderPath is required.");
-        if (string.IsNullOrWhiteSpace(downloadMode))
-        {
-            errors.Add("downloadMode is required.");
-        }
-        else if (downloadMode != "pdf" && downloadMode != "attachments")
-        {
-            errors.Add("downloadMode must be one of: pdf, attachments.");
-        }
-        if (deleteAttachments is null) errors.Add("deleteAttachments is required.");
+        // Bind by hand rather than with [FromQuery]: a malformed bool would
+        // otherwise fail model binding before we run, and ASP.NET's JSON
+        // problem-details body renders in Kuali as "[object Object]".
+        // Every parameter is checked so the operator gets the complete list of
+        // problems in one response instead of one per retry.
+        var validation = ImportRequestValidator.Validate(
+            request.Query,
+            settings.Value.Import.ParseAllowedRoots());
 
-        if (errors.Count > 0)
+        if (!validation.IsValid)
         {
             log.LogWarning("Import request rejected (validation): {Errors}",
-                string.Join(" | ", errors));
-            return TextError(400, string.Join("\n", errors));
+                string.Join(" | ", validation.Errors));
+            return TextError(400, string.Join("\n", validation.Errors));
         }
+
+        var documentId = request.Query["documentId"].ToString();
+        var onbaseDocType = request.Query["onbaseDocType"].ToString();
+        var targetFolderPath = request.Query["targetFolderPath"].ToString();
+        var downloadMode = request.Query["downloadMode"].ToString();
+        var deleteAttachments = validation.DeleteAttachments;
+        var deleteDocument = validation.DeleteDocument;
 
         var keywords = ExtractKeywords(request.Query);
 
@@ -68,8 +65,12 @@ public static class ApiController
             "Import request received: documentId={DocumentId} onbaseDocType={OnBaseDocType} " +
             "downloadMode={DownloadMode} deleteAttachments={DeleteAttachments} " +
             "deleteDocument={DeleteDocument} targetFolderPath={TargetFolderPath} keywordCount={KeywordCount}",
-            documentId, onbaseDocType, downloadMode, deleteAttachments,
-            deleteDocument, targetFolderPath, keywords.Count);
+            documentId,
+            // Flattened: Serilog's text sink renders string properties literally, so a
+            // CR/LF in a caller-supplied value would forge log lines (CWE-117).
+            ImportRequestValidator.Show(onbaseDocType),
+            downloadMode, deleteAttachments,
+            deleteDocument, ImportRequestValidator.Show(targetFolderPath), keywords.Count);
 
         // Enqueue only — RetryWorker picks the job up on its next tick and
         // runs ImportService inside its own scope. Returning 202 here means
@@ -81,17 +82,32 @@ public static class ApiController
         // that URL when the job hits a terminal state; the workflow advances on
         // a 2xx response and reads our X-Status-Code header for the final status.
         var responseUrl = request.Headers["X-Response-URL"].ToString();
-        if (string.IsNullOrWhiteSpace(responseUrl)) responseUrl = null;
+        if (string.IsNullOrWhiteSpace(responseUrl))
+        {
+            responseUrl = null;
+        }
+        else
+        {
+            // This header decides where the server will later POST. It arrives from
+            // the caller, so it gets the same outbound guard as download URLs —
+            // otherwise it is an SSRF primitive aimed at anything the host can reach.
+            var urlProblem = OutboundUrl.DescribeProblem(responseUrl, "X-Response-URL");
+            if (urlProblem is not null)
+            {
+                log.LogWarning("Import request rejected (X-Response-URL): {Problem}", urlProblem);
+                return TextError(400, urlProblem);
+            }
+        }
 
         var now = DateTime.UtcNow;
         var job = new ImportJob
         {
-            DocumentId = documentId!,
-            OnBaseDocType = onbaseDocType!,
-            TargetFolderPath = targetFolderPath!,
-            DownloadMode = downloadMode!,
-            DeleteAttachments = deleteAttachments ?? false,
-            DeleteDocument = deleteDocument ?? false,
+            DocumentId = documentId,
+            OnBaseDocType = onbaseDocType,
+            TargetFolderPath = targetFolderPath,
+            DownloadMode = downloadMode,
+            DeleteAttachments = deleteAttachments,
+            DeleteDocument = deleteDocument,
             KeywordsJson = JsonSerializer.Serialize(keywords),
             Status = JobStatus.Queued,
             AttemptCount = 0,

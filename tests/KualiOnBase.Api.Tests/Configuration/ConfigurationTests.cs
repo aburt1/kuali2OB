@@ -45,7 +45,10 @@ public sealed class ConfigurationTests
         var app = Path.Combine(repo, "src", "KualiOnBase.Api");
         var project = File.ReadAllText(Path.Combine(app, "KualiOnBase.Api.csproj"));
 
-        Assert.True(File.Exists(Path.Combine(app, "WWWROOT", "index.html")));
+        // Lowercase on purpose: ASP.NET Core's static-file provider looks for
+        // "wwwroot", and this assertion only passed on case-insensitive
+        // filesystems while it said WWWROOT.
+        Assert.True(File.Exists(Path.Combine(app, "wwwroot", "index.html")));
         Assert.Contains("SERVICES/Data/Migrations/*.sql", project);
     }
 

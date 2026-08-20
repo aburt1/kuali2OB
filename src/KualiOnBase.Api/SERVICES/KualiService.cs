@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -312,7 +313,12 @@ public sealed class KualiClient : IKualiClient
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    internal (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url)
+    internal (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url) =>
+        ResolveDownloadUrl(url, _http.BaseAddress);
+
+    // Static + baseAddress parameter so the URL rules are unit-testable without
+    // standing up an HttpClient.
+    internal static (Uri Uri, bool UseAuth) ResolveDownloadUrl(string url, Uri? baseAddress)
     {
         // Treat only real http(s) URLs as absolute. Root-relative values like
         // `/files/123` parse as file:// when forced through UriKind.Absolute, but
@@ -330,22 +336,58 @@ public sealed class KualiClient : IKualiClient
                 throw new InvalidOperationException(
                     $"Unsupported download URL scheme for '{url}'.");
             }
-            if (_http.BaseAddress is null)
+            if (baseAddress is null)
             {
                 throw new InvalidOperationException(
                     $"Cannot resolve relative Kuali URL '{url}' — Kuali:BaseUrl is not configured.");
             }
-            return (new Uri(_http.BaseAddress, url.TrimStart('/')), UseAuth: true);
+
+            var resolved = new Uri(baseAddress, url.TrimStart('/'));
+
+            // A value that is "relative" by Uri's rules can still escape the base
+            // host: `\/evil.tld/x` parses as a relative URI, survives TrimStart('/'),
+            // and resolves to https://evil.tld/x. This branch attaches the Kuali
+            // bearer token, so without this check a document field could send a
+            // tenant-wide credential — read, update and delete on every Kuali
+            // document — to a host the submitter controls.
+            if (!IsSameOrigin(resolved, baseAddress))
+            {
+                throw new PermanentImportException(
+                    $"Refusing to download '{url}': it resolves to " +
+                    $"{resolved.GetLeftPart(UriPartial.Authority)}, which is not the configured " +
+                    $"Kuali host {baseAddress.GetLeftPart(UriPartial.Authority)}.");
+            }
+
+            return (resolved, UseAuth: true);
         }
 
-        var sameAuthority = _http.BaseAddress is { } baseUri
-            && baseUri.Scheme == Uri.UriSchemeHttps
-            && absolute!.Scheme == Uri.UriSchemeHttps
-            && string.Equals(absolute.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase)
-            && absolute.Port == baseUri.Port;
+        // Absolute URLs reach here from Kuali's PDF export (signed S3/CDN links),
+        // so the host cannot be allowlisted up front. Two guards instead: require
+        // TLS, and refuse addresses inside the network — this server sits on the
+        // campus network next to the OnBase share and the AppNet instance, so an
+        // attacker-supplied URL must not be usable to reach internal hosts.
+        if (absolute!.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new PermanentImportException(
+                $"Refusing to download '{url}': only https download URLs are accepted.");
+        }
 
-        return (absolute!, UseAuth: sameAuthority);
+        if (OutboundUrl.IsNonRoutableHost(absolute))
+        {
+            throw new PermanentImportException(
+                $"Refusing to download '{url}': {absolute.Host} is a loopback, link-local or " +
+                "private address, which a Kuali download URL should never point at.");
+        }
+
+        return (absolute, UseAuth: IsSameOrigin(absolute, baseAddress));
     }
+
+    private static bool IsSameOrigin(Uri candidate, Uri? baseAddress) =>
+        baseAddress is not null
+        && candidate.Scheme == baseAddress.Scheme
+        && string.Equals(candidate.Host, baseAddress.Host, StringComparison.OrdinalIgnoreCase)
+        && candidate.Port == baseAddress.Port;
+
 
     public async Task ClearAttachmentsAsync(
         string documentId,
@@ -554,15 +596,28 @@ public sealed class KualiResponseUrlNotifier
                     error = error ?? job.LastError ?? "unknown",
                 };
 
+        // Defence in depth: the endpoint rejects a bad X-Response-URL before queueing,
+        // but a replayed or hand-inserted job row must not become an outbound request
+        // to an arbitrary address either.
+        var urlProblem = OutboundUrl.DescribeProblem(job.ResponseUrl, "X-Response-URL");
+        if (urlProblem is not null)
+        {
+            _log.LogWarning("Refusing X-Response-URL POST for job {JobId}: {Problem}", job.Id, urlProblem);
+            return false;
+        }
+
         using var client = _httpFactory.CreateClient(HttpClientName);
         using var content = JsonContent.Create(payload, options: JsonOptions);
-        using var req = new HttpRequestMessage(HttpMethod.Post, job.ResponseUrl) { Content = content };
-        // Kuali reads X-Status-Code to surface the actual outcome of the
-        // integration step; anything in 2xx-range advances the workflow.
-        req.Headers.TryAddWithoutValidation("X-Status-Code", succeeded ? "200" : "500");
-
+        // Constructed inside the try: an unparseable URI throws from the ctor, and
+        // outside the try that escaped as an unhandled exception in the worker loop.
+        HttpRequestMessage? req = null;
         try
         {
+            req = new HttpRequestMessage(HttpMethod.Post, job.ResponseUrl) { Content = content };
+            // Kuali reads X-Status-Code to surface the actual outcome of the
+            // integration step; anything in 2xx-range advances the workflow.
+            req.Headers.TryAddWithoutValidation("X-Status-Code", succeeded ? "200" : "500");
+
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {

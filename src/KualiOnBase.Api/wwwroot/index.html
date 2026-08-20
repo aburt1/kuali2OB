@@ -562,11 +562,20 @@
   const liveDot = $("#live-dot");
   const liveText = $("#live-text");
 
+  // The app may be hosted under an IIS sub-application path (e.g. /kuali2OB),
+  // in which case ASP.NET Core serves it with that PathBase. A root-relative
+  // "/api/..." would escape the app entirely and hit whatever else lives at the
+  // site root — on the CSUB test server that's OnBase AppNet, which answers with
+  // a redirect to its login page and a 500. Derive the prefix from the page's own
+  // location so the same file works at "/" and under any sub-path.
+  const API_BASE = location.pathname.replace(/\/(index\.html)?$/, "");
+  const api = (path) => API_BASE + path;
+
   const KEY_STORAGE = "kuali-onbase.apikey";
-  const getKey = () => localStorage.getItem(KEY_STORAGE) || "";
+  const getKey = () => sessionStorage.getItem(KEY_STORAGE) || "";
   const setKey = (v) => {
-    if (v) localStorage.setItem(KEY_STORAGE, v);
-    else localStorage.removeItem(KEY_STORAGE);
+    if (v) sessionStorage.setItem(KEY_STORAGE, v);
+    else sessionStorage.removeItem(KEY_STORAGE);
     renderKeyState();
   };
 
@@ -660,7 +669,7 @@
     }
 
     try {
-      const res = await fetch("/api/kuali-onbase-import?" + params.toString(), {
+      const res = await fetch(api("/api/kuali-onbase-import?") + params.toString(), {
         method: "POST",
         headers: { "Authorization": "Bearer " + getKey() },
       });
@@ -851,7 +860,7 @@
       return;
     }
     try {
-      const res = await fetch("/api/jobs?limit=100", {
+      const res = await fetch(api("/api/jobs?limit=100"), {
         headers: { "Authorization": "Bearer " + key },
       });
       if (res.status === 401) {
@@ -896,7 +905,7 @@
 
   async function openJobFile(jobId, index, name) {
     try {
-      const res = await fetch(`/api/jobs/${jobId}/files/${index}`, {
+      const res = await fetch(api(`/api/jobs/${jobId}/files/${index}`), {
         headers: { "Authorization": "Bearer " + getKey() },
       });
       if (!res.ok) {

@@ -91,6 +91,19 @@ public sealed class JobsService
             cancellationToken: ct));
     }
 
+    // Terminal failures only. Queued/Retrying jobs are still in flight and must
+    // survive. JobEvents rows go with the job: the FK declares ON DELETE CASCADE
+    // (001_init.sql) and Db.Open sets PRAGMA foreign_keys=ON, so the stored form
+    // payloads are removed too rather than being orphaned.
+    public async Task<int> DeleteFailedOlderThanAsync(DateTime cutoffUtc, CancellationToken ct)
+    {
+        using var conn = _db.Open();
+        return await conn.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM ImportJobs WHERE Status = 'Failed' AND UpdatedAt < @Cutoff;",
+            new { Cutoff = cutoffUtc },
+            cancellationToken: ct));
+    }
+
     public async Task<IReadOnlyList<ImportJob>> ListRecentAsync(int limit, CancellationToken ct)
     {
         using var conn = _db.Open();
@@ -351,15 +364,27 @@ public sealed class RetryWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            var exhausted = job.AttemptCount >= _options.MaxAttempts;
+            // A bad parameter or a disallowed target path cannot succeed later, so
+            // burning the full backoff schedule on it only delays the operator
+            // seeing a definitive answer (and spams Kuali's retry queue).
+            var permanent = ex is PermanentImportException;
+            var exhausted = permanent || job.AttemptCount >= _options.MaxAttempts;
             if (exhausted)
             {
                 job.Status = JobStatus.Failed;
                 job.LastError = ex.Message;
                 job.NextAttemptAt = null;
-                _log.LogError(ex,
-                    "Retry job {JobId} exhausted {Max} attempts; marked Failed",
-                    job.Id, _options.MaxAttempts);
+                if (permanent)
+                {
+                    _log.LogError(ex,
+                        "Retry job {JobId} failed permanently (not retryable); marked Failed", job.Id);
+                }
+                else
+                {
+                    _log.LogError(ex,
+                        "Retry job {JobId} exhausted {Max} attempts; marked Failed",
+                        job.Id, _options.MaxAttempts);
+                }
             }
             else
             {
@@ -489,6 +514,17 @@ public sealed class BackupCleanupWorker : BackgroundService
             if (prunedRows > 0)
             {
                 _log.LogInformation("Pruned {Count} succeeded ImportJobs older than {Cutoff:o}", prunedRows, jobCutoff);
+            }
+        }
+
+        if (_retry.FailedJobRetentionDays > 0)
+        {
+            var failedCutoff = DateTime.UtcNow.AddDays(-_retry.FailedJobRetentionDays);
+            var prunedFailed = await jobs.DeleteFailedOlderThanAsync(failedCutoff, ct);
+            if (prunedFailed > 0)
+            {
+                _log.LogInformation("Pruned {Count} failed ImportJobs older than {Cutoff:o}", prunedFailed, failedCutoff);
+                prunedRows += prunedFailed;
             }
         }
 
